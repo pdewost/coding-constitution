@@ -12,6 +12,19 @@ Antigravity is a system of Markdown documents that make AI coding agents (Claude
 - **Session amnesia**: A new session starts from scratch, re-discovering everything
 - **Skill duplication**: The agent writes a utility that already exists in the project
 
+### The tier system
+
+Antigravity organizes project knowledge into a strict hierarchy. Each tier has a different scope, owner, and change frequency:
+
+| Tier | File | Scope | Changes when... |
+|------|------|-------|-----------------|
+| **Tier 0** | `ANTIGRAVITY.md` | How the agent should *behave* — planning, verification, continuity | Rarely. Behavioral rules are stable. |
+| **Tier 1** | `*_SPEC.md` | Platform truths — encoding quirks, framework conventions, API gotchas | The platform changes (new OS, new framework major version). |
+| **Tier 2** | `PROJECT_BRIEF.md` | What *this project* does, its tech stack, safety constraints | The project scope changes. |
+| **Tier 2.5** | `BRAIN/` directory | Live state — what's running, what happened, what to do next | Every session. |
+
+The agent loads them in order: Tier 0 first, then 1, then 2, then 2.5. Higher tiers override lower tiers only for current-state facts, never for behavioral rules. See [`docs/tier-architecture.md`](docs/tier-architecture.md) for the full explanation.
+
 ## How it compares to [agent-skills](https://github.com/addyosmani/agent-skills)
 
 Addy Osmani's `agent-skills` is excellent — we adopted several of its ideas (anti-rationalization tables, confusion management, scope discipline). The two systems complement each other:
@@ -67,8 +80,6 @@ your-workspace/
 │           ├── STATUS.md
 │           └── TASK.md
 ```
-
-See [`docs/tier-architecture.md`](docs/tier-architecture.md) for the full explanation.
 
 ### 4. Create skills
 Use the [`templates/SKILL.md.template`](templates/SKILL.md.template) to create skills with:
