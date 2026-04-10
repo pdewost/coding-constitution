@@ -1,0 +1,7 @@
+Antigravity
+Copyright 2026 Philippe Dewost
+
+This project includes ideas adapted from agent-skills by Addy Osmani
+(https://github.com/addyosmani/agent-skills), licensed under MIT.
+Specifically: anti-rationalization tables, confusion management protocol,
+and scope discipline patterns.

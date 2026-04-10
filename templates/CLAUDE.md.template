@@ -1,0 +1,22 @@
+# {{Domain Name}} — Session Entry
+
+## Load Order
+1. Read `ANTIGRAVITY.md` (Tier 0 -- behavioral master, DO NOT EDIT)
+2. Read `{{DOMAIN}}_SPEC.md` (Tier 1 -- platform rules)
+3. Read the active project's `PROJECT_BRIEF.md` (Tier 2 -- tactical goals)
+4. If `BRAIN/` exists in the project, read `BRAIN/JOURNAL.md` + `BRAIN/STATUS.md` first (Tier 2.5 -- live state)
+
+## Skills Available in This Domain
+- `{{skill_1}}` v1.0 -- {{description}}
+- `{{skill_2}}` v1.0 -- {{description}}
+
+## Model Routing (multi-model setups only)
+| Task | Model |
+|------|-------|
+| Bulk search, renames, scaffolding | Speed tier (Flash/Haiku) |
+| Planning, risk analysis, fix strategy | Precision tier (Sonnet/Opus) |
+| Execution, debugging | Precision tier (Sonnet/Opus) |
+
+## Domain Safety Rules
+1. **{{rule_1}}** -- {{rationale}}
+2. **{{rule_2}}** -- {{rationale}}

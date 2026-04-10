@@ -1,0 +1,23 @@
+# PROJECT BRIEF: {{Project Name}}
+
+## Goal
+{{One paragraph: what this project does and why it exists.}}
+
+## Tech Stack
+- **Language**: {{primary language}}
+- **Framework**: {{if applicable}}
+- **Key Dependencies**: {{list}}
+
+## Skills Used
+- `{{skill_name}}` -- {{how this project uses it}}
+
+## Safety Constraints
+1. {{constraint_1 — e.g., "never delete production data without backup"}}
+2. {{constraint_2}}
+
+## Verification Protocol
+{{How to verify this project works — test command, endpoint to hit, UI to check.}}
+
+## Tier References
+- Tier 0: `ANTIGRAVITY.md` (behavioral master)
+- Tier 1: `{{DOMAIN}}_SPEC.md` (platform rules)
