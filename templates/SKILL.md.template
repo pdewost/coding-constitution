@@ -1,0 +1,61 @@
+# SKILL: {{skill_name}} (v1.0)
+
+{{one_line_description}}
+
+---
+
+## Purpose
+{{high_level_goal — this field doubles as the discovery-time summary for progressive loading}}
+
+---
+
+## Interface
+
+### 1. **{{primary_action}} (`scripts/{{script_name}}`)**
+{{description of what it does}}
+- **Input**: {{expected data format}}
+- **Output**: {{expected result and error states}}
+
+---
+
+## Usage Patterns
+
+### CLI
+```bash
+python3 _skills/{{skill_name}}/scripts/{{script_name}} {{args}}
+```
+
+### Python Integration
+```python
+from _skills.{{skill_name}}.scripts.{{module}} import {{function}}
+
+result = {{function}}({{args}})
+```
+
+---
+
+## Common Gotchas & Fixes
+
+1. **{{gotcha_name}}**: {{description and fix}}
+2. **{{gotcha_name}}**: {{description and fix}}
+
+---
+
+## Common Rationalizations
+
+| Rationalization | Why it's wrong |
+|---|---|
+| *"{{excuse to skip a step}}"* | *{{why that excuse fails}}* |
+| *"{{excuse to skip a step}}"* | *{{why that excuse fails}}* |
+
+---
+
+## Verification Protocol
+{{skill_name}} output is considered valid if:
+1. {{criterion_1}}
+2. {{criterion_2}}
+
+## Metadata
+- **Phase**: {{ORIENT / PLAN / BUILD / VERIFY / SHIP}}
+- **Last verified**: {{date}}
+- **Status**: {{Active / Dormant / Deprecated}}
