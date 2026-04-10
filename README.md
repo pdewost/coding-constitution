@@ -103,6 +103,12 @@ When Model A runs out of context, Model B picks up cold using:
 
 See [`docs/multi-model-orchestration.md`](docs/multi-model-orchestration.md).
 
+### Operational safety
+When agents run alongside cron jobs, scheduled syncs, or other agents, temporal collisions corrupt data silently. Antigravity defines patterns for this: forbidden time windows, sentinel files, pre-flight process checks, and destructive mode gates. See [`docs/operational-safety.md`](docs/operational-safety.md).
+
+### Incident-driven safety rules
+The best safety rules trace back to real incidents: "NEVER use `delete person` — it destroyed data that iCloud propagated to every device within seconds." Each rule has a prohibition, a consequence, an alternative, and an incident reference. See [`docs/safety-rules.md`](docs/safety-rules.md).
+
 ### Anti-rationalization
 LLMs generate plausible excuses for skipping steps ("this is too simple to need tests"). Each skill includes a table of common rationalizations paired with rebuttals. Adopted from [agent-skills](https://github.com/addyosmani/agent-skills) — credit where due.
 
@@ -116,7 +122,10 @@ antigravity/
 │   ├── tier-architecture.md        # Tier 0/1/2/2.5 explained
 │   ├── observability-markers.md    # How to audit agent compliance
 │   ├── multi-model-orchestration.md # Cross-model continuity
-│   └── skill-anatomy.md            # SKILL.md specification
+│   ├── skill-anatomy.md            # SKILL.md specification
+│   ├── example-tier1-spec.md       # Real Tier 1 spec (macOS Automation)
+│   ├── operational-safety.md       # Temporal constraints, collision windows, sentinel files
+│   └── safety-rules.md             # Incident-driven safety rule pattern
 ├── skills/
 │   ├── strategic-rebase/SKILL.md   # Example: project onboarding skill
 │   └── example-applescript-bridge/SKILL.md  # Example: platform integration skill
