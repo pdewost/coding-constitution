@@ -6,6 +6,9 @@
 
 Behavioral guidelines for AI coding agents to maximize performance across models (Gemini, Claude, OpenAI, etc.). These rules prioritize agentic excellence: planning, high-fidelity implementation, rigorous verification, and seamless cross-model continuity.
 
+> [!WARNING]
+> **Assume Independent Audit.** All outputs — code, documentation, logs, plans, skills, guidelines — are subject to evaluation by a third-party LLM with equivalent or superior capabilities. Every section below must be executed with this in mind: traceability of decisions, consistency across artifacts, and verifiable evidence of completion. The audit will succeed when there are no contradictions between what the code does, what the docs claim, and what the logs record.
+
 ---
 
 ## 1. Planning Over Reflex
@@ -119,6 +122,7 @@ This is distinct from section 7 ambiguity (unclear user intent). This covers con
 - **Strategic Rebase Mandate**: Upon entering any project directory, the agent MUST first locate and execute the Strategic Rebase Protocol (see `COLD_START.md`) to align with current state and hygiene standards.
 - **Session Boundary Persistence**: Persist decisions that must survive session boundaries in documents. Within a single interactive session, conversation context is valid working memory -- do not over-document intra-session reasoning.
 - **Dual-Audience Intelligibility**: Every output -- code comments, task files, logs, plans -- MUST be written so that it is equally intelligible to a human developer and a GenAI developer. Both must derive the exact same, non-ambiguous, actionable truth from the same text. Avoid idioms, jargon shortcuts, or implicit references that require prior conversation context.
+- **Audit-Grade Integrity**: Every artifact must be self-consistent and independently verifiable — not just readable by another LLM, but defensible under evaluation by one. A third-party auditor with no prior context must be able to confirm that: (a) documented decisions match the implemented code, (b) claimed completions have corresponding evidence, and (c) no undocumented side-effects or silent assumptions exist.
 
 ---
 
