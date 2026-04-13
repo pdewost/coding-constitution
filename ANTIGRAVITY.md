@@ -154,6 +154,7 @@ This is distinct from §7 ambiguity (unclear user intent). This covers conflicts
 - **Global Impact Audit**: Before modifying a shared Skill, you MUST perform a "Dependency Trace" (`grep` for the skill name in all `PROJECT_BRIEF.md` files) to ensure no regressions in other projects.
 - **The "Local Shadow" Rule**: If a project requires a unique tweak to a Global Skill, create a `/_local_skills/` folder in the project root to host the shadow version. Do NOT edit the Global version until the tweak is proven stable and safe for the entire fleet.
 - **Skill Documentation**: Any new Skill developed MUST include a `SKILL.md` that conforms to the `UNIVERSAL_SKILL_SPEC.md`.
+- **Registered Skills**: `github_commit_audit` (v1.0.0) — pre-commit gate + post-push audit. Enforced via PostToolUse hook on `git push` and `/audit` slash command.
 
 ## 12. Surgical Integrity Protocol
 **The "Do No Harm" Rule.**
