@@ -123,6 +123,9 @@ The best safety rules trace back to real incidents: "NEVER use `delete person` �
 ### Anti-rationalization
 LLMs generate plausible excuses for skipping steps ("this is too simple to need tests"). Each skill includes a table of common rationalizations paired with rebuttals. Adopted from [agent-skills](https://github.com/addyosmani/agent-skills) — credit where due.
 
+### Assume Independent Audit
+All agent outputs — code, documentation, logs, plans — are subject to evaluation by a third-party LLM with equivalent or superior capabilities. This principle pervades every section of `ANTIGRAVITY.md`: decisions must be traceable, artifacts self-consistent, and completion claims backed by verifiable evidence. The audit succeeds when there are no contradictions between what the code does, what the docs claim, and what the logs record.
+
 ## Repository structure
 
 ```
