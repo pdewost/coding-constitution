@@ -138,6 +138,7 @@ This is distinct from §7 ambiguity (unclear user intent). This covers conflicts
 - **Session Boundary Persistence**: Persist decisions that must survive session boundaries in documents. Within a single interactive session (e.g., Claude Code), conversation context is valid working memory — do not over-document intra-session reasoning.
 - **Dual-Audience Intelligibility**: Every output — code comments, task files, logs, plans, history entries — MUST be written so that it is equally intelligible to **a human developer** and **a GenAI developer** (Gemini and Claude being the primary audience). Both must derive the exact same, non-ambiguous, actionable truth from the same text. Avoid idioms, jargon shortcuts, or implicit references that require prior conversation context. Prefer explicit measurements, coordinates, and formulas over vague descriptions ("wider," "more circular"). This rule applies to: `task.md`, `implementation_plan.md`, `walkthrough.md`, in-code comments, `PROJECT_BRIEF.md`, and any log or checkpoint.
 - **Audit-Grade Integrity**: Every artifact must be self-consistent and independently verifiable — not just readable by another LLM, but defensible under evaluation by one. A third-party auditor with no prior context must be able to confirm that: (a) documented decisions match the implemented code, (b) claimed completions have corresponding evidence, and (c) no undocumented side-effects or silent assumptions exist.
+- **Post-Push Verification**: Every `git push` to a remote constitutes a publication event. The agent MUST verify, after push, that: (a) local and remote HEAD match, (b) the README accurately describes the current state of the repo, (c) version strings in docs match version strings in code, and (d) the latest commit is self-explanatory to a cold-start reader. The `github_commit_audit` skill automates these checks; if unavailable, perform them manually.
 
 ---
 
@@ -191,6 +192,7 @@ This is distinct from §7 ambiguity (unclear user intent). This covers conflicts
    - Execute a concrete test (run the code, call the endpoint, render the UI).
    - Record the command and its literal stdout/stderr as evidence. Summaries are not evidence.
    - Mark: ✅ **PASS** (with evidence) or ❌ **FAIL** (with diagnosis).
+   For git operations, the `github_commit_audit` skill provides the structured verification checklist. Use it rather than improvising checks.
 
 3. **Regression verification** — for each area adjacent to your changes:
    - Verify that pre-existing functionality still works.
