@@ -25,6 +25,8 @@ Antigravity organizes project knowledge into a strict hierarchy. Each tier has a
 
 The agent loads them in order: Tier 0 first, then 1, then 2, then 2.5. Higher tiers override lower tiers only for current-state facts, never for behavioral rules. See [`docs/tier-architecture.md`](docs/tier-architecture.md) for the full explanation.
 
+> **Note:** `PROJECT_BRIEF.md`, `BRAIN/`, `CLAUDE.md`, and `AGENTS.md` are user-created files that live in your own projects. They are not part of this repository — Antigravity only provides the behavioral master (`ANTIGRAVITY.md`), templates, and documentation.
+
 ## How it compares to [agent-skills](https://github.com/addyosmani/agent-skills)
 
 Addy Osmani's `agent-skills` is excellent — we adopted several of its ideas (anti-rationalization tables, confusion management, scope discipline). The two systems complement each other:
