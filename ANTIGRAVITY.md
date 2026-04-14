@@ -110,6 +110,47 @@ This is distinct from §7 ambiguity (unclear user intent). This covers conflicts
 
 *Task context may override this table, but overrides must be stated explicitly.*
 
+### Environment Model Registries (hardwired — user verifies periodically)
+
+The agent enumerates the applicable registry at session start and ranks models cheapest → most expensive. Static tables are reference; the agent confirms availability before advising.
+
+**Claude Code**
+| Model | Cost tier | Available via |
+|---|---|---|
+| Sonnet 4.6 | 1× (cheapest) | Main agent (default) |
+| Opus | 3× | Agent tool `model:"opus"` — justify inline |
+| Opus 1M context | 3×+ | Agent tool `model:"opus"` + extended context flag — justify inline |
+| Gemini / Ollama | ❌ | Not accessible in Claude Code sandbox |
+
+**Google Antigravity**
+| Model | Cost tier | Available via |
+|---|---|---|
+| Gemini 3 Flash | 1× (cheapest) | Default |
+| Gemini 3.1 Pro (Low) | 3× | Model selector |
+| GPT-OSS 120B (Medium) | 4× | Model selector |
+| Gemini 3.1 Pro (High) | 5× | Model selector |
+| Claude Sonnet 4.6 (Thinking) | 8× | Model selector |
+| Claude Opus 4.6 (Thinking) | 15× (most expensive) | Model selector |
+| Custom | variable | Manual configuration |
+
+**OpenAI Codex**
+| Model | Cost tier | Available via |
+|---|---|---|
+| GPT-5.2 | 1× (cheapest) | Model selector |
+| GPT-5.4-Mini | 2× | Model selector |
+| GPT-5.3-Codex | 4× | Model selector |
+| GPT-5.4 | 8× (most expensive) | Model selector (default) |
+
+Reasoning level multiplies effective cost — declare alongside model:
+| Reasoning level | Cost multiplier |
+|---|---|
+| Bas (Low) | 1× |
+| Moyen (Medium) | 2× (default) |
+| Élevé (High) | 4× |
+| Très approfondi (Very thorough) | 8×+ |
+
+*Effective cost = model tier × reasoning multiplier. E.g., GPT-5.4 + Très approfondi ≈ 64× base.*
+
 **Active Advisory Rule**: Before starting any planning or execution phase, the system MUST:
 1. Identify the task class from the table above.
 2. State which model the table prescribes.

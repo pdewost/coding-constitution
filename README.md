@@ -114,6 +114,8 @@ Rules loaded at session start decay as context fills up. §9bis defines mandator
 ### Model routing advisory (§8)
 The model routing table is now an active protocol, not a passive reference. Before starting any execution phase, the agent must identify the prescribed model and warn the user if they're on a higher-cost model than the task requires.
 
+The routing table maps task classes to cost *tiers* (cheapest / mid / top), not model names. A companion **Environment Model Registries** section hardwires the available models and their relative cost for each supported runtime — Claude Code, Google Antigravity, and OpenAI Codex — ranked cheapest → most expensive. For OpenAI Codex, reasoning level is a separate cost multiplier (up to 8×). The agent enumerates the applicable registry at session start so routing advice is always grounded in what is actually reachable.
+
 ### Multi-model continuity
 When Model A runs out of context, Model B picks up cold using:
 - `COLD_START.md` — the rebase protocol
