@@ -99,7 +99,7 @@ This is distinct from §7 ambiguity (unclear user intent). This covers conflicts
 - **Synthesis/Context Tier**: Large-context models (e.g., Gemini 2.5 Pro) for codebase-wide reasoning, interpreting visual layouts, and synthesizing multi-session project histories.
 - **Interactive/Iterative Tier**: Claude Code for rapid iteration with human-in-the-loop, exploratory debugging, and tasks where the feedback cycle matters more than upfront planning.
 
-### Model Routing Heuristic (Antigravity only — Claude Code has no model choice)
+### Model Routing Protocol
 
 | Task type | Preferred model | Rationale |
 |-----------|----------------|-----------|
@@ -108,7 +108,13 @@ This is distinct from §7 ambiguity (unclear user intent). This covers conflicts
 | File editing, AppleScript, Python execution | Sonnet 4.6 | Precision + tool-use reliability |
 | Vision tasks (typeface proof, visual audit) | Gemini (vision-capable) | Multimodal, faster iteration |
 
-*Advisory heuristic — not a hard protocol. Task context overrides this table.*
+*Task context may override this table, but overrides must be stated explicitly.*
+
+**Active Advisory Rule**: Before starting any planning or execution phase, the system MUST:
+1. Identify the task class from the table above.
+2. State which model the table prescribes.
+3. If the current model does not match, warn the user with a one-line advisory before proceeding: *"Tier-x routes [task class] to [model]. You're on [current]. Consider switching to preserve credits."*
+This advisory is non-blocking — the user may proceed on any model — but it must be surfaced, not silently skipped.
 
 ## 9. Context Window Management
 **Manage attention as a finite resource.**
@@ -117,6 +123,23 @@ This is distinct from §7 ambiguity (unclear user intent). This covers conflicts
 - **Summarize Stale Context**: If a conversation or task has been running long, periodically summarize completed work into a checkpoint note in `task.md` rather than relying on the model re-reading 50 turns of history.
 - **Gemini Large Context**: When using Gemini's extended window, load broadly but query narrowly — use the context for cross-file search, not as a substitute for focused reasoning.
 - **Claude Code Sessions**: Leverage the interactive loop. Rather than front-loading all context, pull files incrementally as the task evolves. Persist key findings in documents so they survive context limits.
+
+## 9bis. Governance Checkpoints
+**Rules that don't re-activate themselves are rules that decay.**
+
+> [!IMPORTANT]
+> Compliance with this file MUST be actively maintained, not passively assumed. The following checkpoints are mandatory self-reinforcement triggers.
+
+1. **Task-boundary checkpoint** — Before starting any new priority, sprint, or execution phase, re-read this file and the project's `CLAUDE.md`. State in one visible line: the applicable rules, the prescribed model (per §8 routing table), and any safety constraints for the task ahead. This is not optional documentation — it is a gate.
+
+2. **Post-compaction re-anchor** — After any context compaction, conversation continuation from summary, or model handover, the FIRST action is re-reading Tier 0 (this file) and Tier 2 (project `CLAUDE.md` / `PROJECT_BRIEF.md`). Do not rely on the summary's paraphrase of rules — summaries lose nuance, and nuance is where violations hide.
+
+3. **Autonomy-proportional rigor** — The higher the autonomy granted (batch execution, background agents, multi-file sprints), the more explicit the checkpoint must be:
+   - Single-file edit: silent compliance is sufficient.
+   - Multi-file task (2–4 files): state applicable rules inline.
+   - Multi-priority sprint (5+ tasks): visible governance preamble before first task.
+
+4. **Drift detection** — If the user reminds you of a rule you should have been following unprompted, treat it as a governance failure. Acknowledge the lapse, re-read the source files, and increase checkpoint frequency for the remainder of the session. The user's reminders are a failure signal, not a feature of the workflow.
 
 ## 10. LLM Continuity Protocol
 **Every step documented, every handover seamless.**
