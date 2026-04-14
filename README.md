@@ -36,7 +36,7 @@ Addy Osmani's `agent-skills` is excellent — we adopted several of its ideas (a
 | **Target** | Single agent, single session, IDE | Multiple models, multiple sessions, any runtime |
 | **Skills** | Process docs (Markdown only) | Process docs + executable scripts + tests |
 | **Session continuity** | Not addressed | §10 LLM Continuity Protocol — cold-start handover is a hard requirement |
-| **Multi-model** | Not addressed | §8 Model routing heuristic, §10 Dual-audience intelligibility |
+| **Multi-model** | Not addressed | §8 Model routing protocol, §10 Dual-audience intelligibility |
 | **Environment awareness** | Not addressed | §2 Environment Detection — probes runtime before acting |
 | **Observability** | Verification checklists | Grep-able markers (`CONTRADICTION:`, `RISK:`, `NOTICED BUT NOT TOUCHING:`) |
 | **Skill isolation** | Global only | Global + Local Shadow override per project |
@@ -107,6 +107,12 @@ Behavioral rules can't be unit-tested. Antigravity solves this by requiring agen
 | `Source:` | Agent introduces an API/command not previously used |
 
 Grep your session transcripts for these markers to audit compliance. See [`docs/observability-markers.md`](docs/observability-markers.md).
+
+### Governance checkpoints (§9bis)
+Rules loaded at session start decay as context fills up. §9bis defines mandatory self-reinforcement triggers: task-boundary re-reads, post-compaction re-anchoring, autonomy-proportional rigor, and drift detection (if the user has to remind you of a rule, something already went wrong). See the `Governance Checkpoints` section in [`ANTIGRAVITY.md`](ANTIGRAVITY.md).
+
+### Model routing advisory (§8)
+The model routing table is now an active protocol, not a passive reference. Before starting any execution phase, the agent must identify the prescribed model and warn the user if they're on a higher-cost model than the task requires.
 
 ### Multi-model continuity
 When Model A runs out of context, Model B picks up cold using:
