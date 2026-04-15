@@ -357,13 +357,28 @@ Notifications are opt-in, not default. A single-session fix or unplanned task ne
 
 **No personal data in ANTIGRAVITY.** Notification target (contact name or handle) is defined per-project in `CLAUDE.md` under the key `NOTIFICATION_TARGET`. If absent, fall back to in-conversation summary. Never hardcode a phone number, email, or handle in any shared document.
 
-### Message Format (3 lines max — this is a mobile notification)
+### Message Format
+
+Prose, not tables. No bureaucratic headers. Write it as you'd message a colleague who needs to know where things stand — not as a status widget.
 
 ```
-✅ Sprint <N> done: <X> tasks | <model> @ <effort> | <date>
-📋 Next: Sprint <N+1> — <one-line description from plan>
-⚙️  Budget: <model> @ <effort> (as declared in plan)
+{Project} — {what was accomplished} ✅
+
+{Files or artifacts updated, named explicitly.}
+
+{Sprint name}: {quantified progress — numbers, not vague claims}. {What worked}. {What didn't and why — honest and specific; distinguish data quality from bugs.}
+
+Starting {next task name} ({task reference from plan}).
+---
+{model} @ {effort}
 ```
+
+**Rules:**
+- Length is content-driven, not line-count-constrained. Be as long as useful, no longer.
+- Quantify: "9/20 contacts matched" beats "most contacts matched."
+- Name the gap honestly: if something didn't work, say why (wrong field, data quality, missing mapping) — not "some cases pending."
+- Name the next task explicitly, with its plan reference. "Starting task 4" is not enough; "Starting Merge Candidates UI design (task 4)" is.
+- Model/effort goes last, after a `---` separator — auditable but non-intrusive.
 
 ### Probe + Send Sequence
 
