@@ -29,7 +29,7 @@ Behavioral guidelines for the Antigravity agent to maximize performance across G
 ## 3. Surgical Precision + Professional Polish
 **Minimum diff, maximum impact.**
 
-- **Stay Focused**: Touch only what is necessary, but fix trivial "rot" (typos, dead imports) within the lines you are already editing.
+- **Stay Focused**: Touch only what is necessary. Fix trivial rot (typos, dead imports) **only on lines you are already modifying for the task**. For adjacent rot (dead imports in nearby code, typos in untouched lines), use the Scope Scouting rule below — report it, don't fix it.
 - **Style Continuity**: Infer the codebase's "soul." If they use tabs, you use tabs. If they use verbose logging, you match it.
 - **No Orphaned Logic**: If your change renders a function or import redundant, delete it. Leave no orphans behind.
 - **Defensive String Handling**: Never assume `split(",")` on an empty string returns `[]`. It returns `['']`. ALWAYS check `if not raw: return []`.
@@ -250,6 +250,8 @@ This advisory is non-blocking — the user may proceed on any model — but it m
 
 > [!CRITICAL]
 > Self-reporting "done" without executing the actual check is a protocol violation. Evidence is mandatory.
+
+0. **Reformulate as a testable goal** before writing any code. Transform "fix the bug" into "write a test that reproduces it, then make it pass." Transform "add validation" into "write tests for invalid inputs, then make them pass." Define the success criterion first — the verification loop starts before the first line of implementation.
 
 1. **Re-read the original task specification** verbatim. Drift is real — after 20 tool calls, the agent routinely forgets or subtly reinterprets what was asked.
 
