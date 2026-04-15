@@ -101,14 +101,48 @@ This is distinct from §7 ambiguity (unclear user intent). This covers conflicts
 
 ### Model Routing Protocol
 
-| Task type | Preferred model | Rationale |
-|-----------|----------------|-----------|
-| Bulk exploration, search, renames, scaffolding | Gemini Flash | Speed + cost at high volume |
-| Planning, risk analysis, architecture decisions | Sonnet 4.6 | Reasoning depth, safety gating |
-| File editing, AppleScript, Python execution | Sonnet 4.6 | Precision + tool-use reliability |
-| Vision tasks (typeface proof, visual audit) | Gemini (vision-capable) | Multimodal, faster iteration |
+| Task type | Preferred model | Effort | Rationale |
+|-----------|----------------|--------|-----------|
+| Bulk exploration, search, renames, scaffolding | Gemini Flash | low | Speed + cost at high volume |
+| Planning, risk analysis, architecture decisions | Sonnet 4.6 | high | Reasoning depth, safety gating |
+| File editing, AppleScript, Python execution | Sonnet 4.6 | medium | Precision + tool-use reliability |
+| Vision tasks (typeface proof, visual audit) | Gemini (vision-capable) | medium | Multimodal, faster iteration |
+| Irreversible changes, security, schema migrations | Sonnet 4.6 | high | Risk demands deeper reasoning |
+| Novel architecture, hardest single problem | Opus 4.6 | max | One-shot, no budget constraint — ephemeral, justify inline |
 
-*Task context may override this table, but overrides must be stated explicitly.*
+*Task context may override this table, but overrides must be stated explicitly. `max` effort does not persist across sessions.*
+
+### Effort Level Reference
+
+| Level | Thinking tokens | Use when | Anti-pattern |
+|-------|----------------|----------|--------------|
+| `low` | Minimal | Crystal-clear, reversible, cost-sensitive tasks | Don't use for anything with ambiguity |
+| `medium` | Moderate | Most coding tasks; default for Pro/Max users | — |
+| `high` | Deep | Underspecified problems, irreversible changes, production bugs | Avoid for routine work — causes overthinking |
+| `max` | Unlimited | Single hardest problem of the session; set explicitly each time | Never as a default; ephemeral only |
+
+**Tip**: add `ultrathink` to a single prompt to trigger `high` effort for that turn only, without changing the session setting.
+
+### Sprint Budget Protocol
+
+**Sprint budgets are a planning output, not a runtime inference.**
+
+When an `implementation_plan.md` (or equivalent) defines a multi-sprint sequence, the plan MUST declare the `(model, effort)` budget for each sprint at planning time, before execution begins. The executing agent uses that declared budget — it does not re-derive it.
+
+**In the plan document**, each sprint block must include:
+```
+## Sprint N — <name>
+Budget: <model> @ <effort>
+Reason: <one sentence justifying the budget choice>
+Tasks: ...
+```
+
+**At sprint end**, the agent appends a one-line completion record to the plan — not a new budget assessment, just an audit trail:
+```
+Sprint N completed: used <model> @ <effort> | <N> tasks done | <date>
+```
+
+If actual effort differed from planned (e.g., a task proved harder than expected), record the deviation and the reason. This feeds back into future planning calibration.
 
 ### Environment Model Registries (hardwired — user verifies periodically)
 
@@ -204,6 +238,7 @@ This advisory is non-blocking — the user may proceed on any model — but it m
 - **Audit-Grade Integrity**: Every artifact must be self-consistent and independently verifiable — not just readable by another LLM, but defensible under evaluation by one. A third-party auditor with no prior context must be able to confirm that: (a) documented decisions match the implemented code, (b) claimed completions have corresponding evidence, and (c) no undocumented side-effects or silent assumptions exist.
 - **Post-Push Verification**: Every `git push` to a remote constitutes a publication event. The agent MUST verify, after push, that: (a) local and remote HEAD match, (b) the README accurately describes the current state of the repo, (c) version strings in docs match version strings in code, and (d) the latest commit is self-explanatory to a cold-start reader. The `github_commit_audit` skill automates these checks; if unavailable, perform them manually.
 
+- **Sprint-End Record**: Upon completing all tasks in a sprint (all items ✅ in the plan), append a one-line completion record to the plan document: `Sprint N completed: used <model> @ <effort> | <N> tasks done | <date>`. If actual effort deviated from the plan's declared budget, note the deviation and reason. Do NOT re-derive the next sprint's budget — that is the plan's job.
 ---
 
 **Success means**: The user sees a clear plan, a surgical implementation that looks premium, and a walkthrough that proves it works — all while leveraging the collective intelligence of the Skill Layer.
@@ -304,3 +339,37 @@ This advisory is non-blocking — the user may proceed on any model — but it m
 3. **No credential patterns**: Code must never contain hardcoded secrets. API keys, tokens, and passwords belong in `.env` files (gitignored) or OS keychain. Agents MUST flag any string matching `password=`, `token=`, `api_key=`, or `secret=` with a literal value in committed code.
 4. **README scope**: `README.md` documents architecture, setup, and pipeline — never personal metrics, PII, or data volumes from a specific user's instance. Use placeholder examples if illustrating output format.
 5. **State backup**: `BRAIN/` and session state files are backed up via local mechanisms (Time Machine, encrypted sync) — never committed to git, even in private repos. Git history is permanent; personal context is not.
+
+## 17. Sprint Notification Protocol
+**Notify only when a plan defines a multi-sprint chain.**
+
+Notifications are opt-in, not default. A single-session fix or unplanned task never triggers a notification. Notifications fire only when:
+1. The active plan document explicitly defines **2 or more sequential sprints**, AND
+2. A sprint boundary is crossed (all sprint tasks ✅)
+
+### Channel Registry (probe in order — use first available)
+
+| Priority | Channel | Runtime | Detection |
+|----------|---------|---------|-----------|
+| 1 | iMessage | Claude Code + iMessage MCP | `mcp__Read_and_Send_iMessages__send_imessage` available |
+| 2 | WhatsApp | (a messaging gateway) | gateway integration plugin registered |
+| 3 | In-conversation summary | Always | Last-resort fallback |
+
+**No personal data in ANTIGRAVITY.** Notification target (contact name or handle) is defined per-project in `CLAUDE.md` under the key `NOTIFICATION_TARGET`. If absent, fall back to in-conversation summary. Never hardcode a phone number, email, or handle in any shared document.
+
+### Message Format (3 lines max — this is a mobile notification)
+
+```
+✅ Sprint <N> done: <X> tasks | <model> @ <effort> | <date>
+📋 Next: Sprint <N+1> — <one-line description from plan>
+⚙️  Budget: <model> @ <effort> (as declared in plan)
+```
+
+### Probe + Send Sequence
+
+1. Check if plan has `>1 sprint` defined → if not, skip notification entirely
+2. Read `NOTIFICATION_TARGET` from project `CLAUDE.md` → if absent, skip to step 4
+3. Probe channel availability (priority order above) → send via first available
+4. Fallback: output the 3-line summary in-conversation
+
+**Never retry a failed send.** Report the failure inline and continue.
