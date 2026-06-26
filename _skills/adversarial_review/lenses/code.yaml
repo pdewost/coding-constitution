@@ -1,0 +1,67 @@
+name: code
+version: "1.0.0"
+description: Code review — delegates to /code-review where the harness offers it; built-in refutation fallback otherwise.
+requires_rendering: false
+
+delegate_to:
+  capability: /code-review
+  kind: harness_command
+  optional: true
+
+evidence_gatherer: |
+  Identify the diff under review (branch, changed files). Run the project's test suite
+  before judging. Read every changed hunk and its call sites. For the fallback path,
+  bring literal test output and file:line citations exactly as /code-review would.
+
+lenses:
+  - id: correctness
+    prompt: |
+      Hunt logic errors, inverted conditions, off-by-ones, and broken edge cases in the
+      changed hunks. Do not infer — execute the tests and any cheap repro. For each
+      suspect hunk, state the invariant it violates and the input that triggers it.
+      Cite file:line and the literal failing assertion or repro output.
+
+  - id: regression
+    prompt: |
+      Identify areas adjacent to the change that should be exercised but may not be:
+      callers of changed function signatures, consumers of changed schemas or configs,
+      downstream modules that depend on altered behavior. For each named caller or
+      consumer, confirm it is covered by the test suite; flag every gap with file:line.
+
+  - id: silent_omission
+    prompt: |
+      Ask: what SHOULD this change have touched but did not? Enumerate symmetric code
+      paths, paired configs, required migrations, and tests for the new behavior that
+      are conspicuously absent. A change that adds a feature without a test is a
+      finding. A schema change without a migration is a finding. Name the missing
+      artifact and its expected path.
+
+  - id: error_handling
+    prompt: |
+      Audit swallowed exceptions, missing failure paths, and error messages that lie
+      about their cause. For every try/except or error branch in the changed code:
+      confirm the exception type is specific, the message is accurate, and the failure
+      path reaches the caller. A bare except or a misleading message is a finding with
+      file:line.
+
+  - id: security_pii
+    prompt: |
+      Scan for secrets committed to code, injection surfaces (SQL, shell, path
+      traversal), and personal-data egress. Apply the hard rule: PII is processed
+      locally only — any cloud egress of personal data is HIGH severity, no exceptions.
+      Run grep for API keys, tokens, and connection strings. For every data-handling
+      code path, confirm the data does not leave the machine.
+
+severity_rubric:
+  HIGH: "The artifact would produce a wrong or unacceptable result, violates a constitutional article or hard rule, or its acceptance test cannot pass as written."
+  MED: "A mandate is unenforceable (no mechanism, no owner), a deliverable is unnamed or unmeasurable, or a gate can be silently skipped."
+  LOW: "Real but cheap to absorb later; does not change the build order."
+
+refutation_prompt: |
+  You are an INDEPENDENT ADVERSARIAL REVIEWER of CODE changes. The artifact was drafted
+  by a DIFFERENT model; your independence is the point. Your framing is REFUTATION:
+  find the reasons this CODE IS WRONG, default suspicious. Never answer 'is this good?'
+  — answer 'where does this fail, and what is the cheapest fix?'. A review with zero
+  findings is suspect: for any lens where you find nothing, you must show the probe you
+  ran that came up empty. Paraphrase-level tracing is forbidden — quote both sides
+  line-level. No vibes: only findings whose presence changes what gets built or shipped.

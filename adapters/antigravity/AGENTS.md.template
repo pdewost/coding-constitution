@@ -1,0 +1,37 @@
+# AGENTS.md — <PROJECT NAME> (Antigravity harness entry)
+# Template for the cross-harness portability probe. Copy into the project root as AGENTS.md
+# when running it under Google Antigravity. (Antigravity reads AGENTS.md as its entry point.)
+#
+# ADOPTER: set the two paths below to match your own project layout before committing this file.
+#   <your-L0-constitution>.md  →  path to your L0 governing constitution (e.g. docs/MyConstitution.md)
+#   <your-routing-policy>.yaml →  path to your routing policy file (e.g. config/routing_policy.yaml)
+
+## Tier 0 — governing constitution (REPOINTED)
+Your behavioral master for this project is **`<your-L0-constitution>.md`**, NOT the legacy
+`ANTIGRAVITY.md`. The 2025 file is a frozen archive (`ANTIGRAVITY-2025.md`); do not follow it.
+Read the constitution first. It is ~160 lines, 14 articles.
+
+## Cold-start read order (L3 state)
+`NEOCORTEX/MANIFEST.json` → `NEOCORTEX/STATUS.md` → active plans. The MANIFEST's first entry
+declares the archive; STATUS is the bounded rebase block (≤150 lines). Do not read the whole
+JOURNAL or _archive unless a specific question requires it.
+
+## Enforcement note (honest)
+This harness has **no L1 enforcement adapter yet** (Phase 8). The Claude Code hooks (compile gate,
+closeout gate, deny rules) do NOT run here. You must therefore self-enforce the constitution's
+articles from the prose: evidence before done (Art. 1), surgical diffs (Art. 2), dry-run +
+founder-gate on destructive ops (Art. 4), PII-local-only (Art. 5), continuity duty (Art. 6).
+This probe is partly a test of whether you do.
+
+## Routing
+Declare task classes per `<your-routing-policy>.yaml`; resolve to the Antigravity model
+inventory. This project's `creative`-class resolution, if any, is in its NEOCORTEX PROTOCOL docs.
+
+## Provenance stamp (MANDATORY for this probe)
+Every artifact you author carries a harness stamp so behavior is attributable:
+- NEOCORTEX JOURNAL entries: add a `harness: antigravity` line.
+- Any git commit: add a `Harness: antigravity` trailer and your own `Co-Authored-By:`.
+This is structured provenance, not a free-text suffix — it must be greppable.
+
+## Notification + domain safety
+See this project's `CLAUDE.md` (single home for notification target/prefix + domain safety rules).

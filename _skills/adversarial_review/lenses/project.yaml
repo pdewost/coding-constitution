@@ -1,0 +1,70 @@
+name: project
+version: "1.0.0"
+description: Project-wide review — refute completeness claims, doc-code coherence, cold-start intelligibility.
+requires_rendering: false
+
+delegate_to:
+  capability: _skills/github_commit_audit
+  kind: procedure
+  optional: true
+
+evidence_gatherer: |
+  Run git status/log in the project repo. Read NEOCORTEX/STATUS.md (or BRAIN/ for
+  unmigrated projects), MANIFEST, latest JOURNAL entries. Grep for stale tokens of
+  any claimed-finished migration (old directory names, old paths, superseded terms).
+  Run the declared test suite (python3.12 -m pytest) when present. Spot-open files
+  the docs claim exist.
+
+lenses:
+  - id: completeness_refutation
+    prompt: |
+      Take every 'complete'/'done'/'migrated' claim in STATUS/JOURNAL/closeout records
+      and try to refute it: grep the codebase for references the completed work should
+      have eliminated (e.g. BRAIN/ refs after a NEOCORTEX migration); list every
+      survivor with path:line. The canonical catch: a migration declared complete with
+      ~15 unrepointed references. Show the literal grep command and its output for every
+      investigated claim.
+
+  - id: doc_code_coherence
+    prompt: |
+      Compare README/STATUS/MANIFEST claims against the actual file tree: stale claims,
+      phantom paths, version strings that disagree across files, counts that no longer
+      hold. Re-derive every count and path by direct inspection — never trust a doc's
+      own summary. List each discrepancy with doc line vs reality.
+
+  - id: dead_and_stale
+    prompt: |
+      Find dead code (unreachable or never-imported modules), orphaned files never
+      imported/invoked, docs describing removed behavior, and TODO/FIXME items claimed
+      resolved but still present in source. Run a grep for TODO/FIXME and cross-check
+      against any resolved-issues list. Each survivor is a finding with file:line.
+
+  - id: test_reality
+    prompt: |
+      Do the declared test suites exist, run, and pass? Run python3.12 -m pytest and
+      capture the literal output. Identify which claimed-critical paths have zero test
+      coverage — check for untested public functions in any changed module. Literal
+      pytest output is required; verdicts without it are inadmissible.
+
+  - id: cold_start
+    prompt: |
+      Apply the Art. 6 cold-start probe: could a fresh agent, from MANIFEST + STATUS
+      alone, state the project's next action correctly? Verify STATUS is within its
+      declared size bound and is current (check dates match recent git commits). Confirm
+      archives are declared where a cold agent will find them. Flag any gap that would
+      cause a cold agent to misidentify the state or next action.
+
+severity_rubric:
+  HIGH: "The artifact would produce a wrong or unacceptable result, violates a constitutional article or hard rule, or its acceptance test cannot pass as written."
+  MED: "A mandate is unenforceable (no mechanism, no owner), a deliverable is unnamed or unmeasurable, or a gate can be silently skipped."
+  LOW: "Real but cheap to absorb later; does not change the build order."
+
+refutation_prompt: |
+  You are an INDEPENDENT ADVERSARIAL REVIEWER of PROJECT state artifacts. The artifact
+  was drafted by a DIFFERENT model; your independence is the point. Your framing is
+  REFUTATION: find the reasons these PROJECT claims are WRONG, default suspicious.
+  Never answer 'is this good?' — answer 'where does this fail, and what is the cheapest
+  fix?'. A review with zero findings is suspect: for any lens where you find nothing,
+  you must show the probe you ran that came up empty. Paraphrase-level tracing is
+  forbidden — quote both sides line-level. No vibes: only findings whose presence
+  changes what gets built or shipped.

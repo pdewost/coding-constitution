@@ -1,6 +1,7 @@
+# build / OS / test cruft — never publish (public history is permanent)
 .DS_Store
-._*
-.Spotlight-V100
-.Trashes
-*.swp
-*~
+__pycache__/
+*.pyc
+.pytest_cache/
+*.log
+.verify/

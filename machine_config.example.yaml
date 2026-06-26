@@ -1,0 +1,46 @@
+# machine_config.example.yaml — L4 reference data (PAICodeConstitution-2026, Art. 13)
+#
+# TEMPLATE — copy to governance/machine_config.yaml and fill in your machine's facts.
+# This file is the single home for machine-specific operational facts.
+# L1 enforcement hooks read THIS file — never hardcode these values.
+# Replace all <placeholder> values with your actual configuration.
+# This example file ships with placeholders; the real machine_config.yaml is NEVER published.
+#
+# Perishable by design; amended freely via git.
+
+version: 1.0
+updated: YYYY-MM-DD    # fill in your adoption date
+machine: "<hardware description, e.g.: MacBook Pro M-series, XX GB RAM, macOS>"
+
+forbidden_windows:
+  # Define time windows when heavy background tasks run, to avoid contention
+  # with manual sessions. Customize to match your scheduled tasks.
+  - id: nightly-sync-collision
+    window: "<HH:MM-HH:MM>"          # local time, daily — e.g. "23:00-03:00"
+    reason: >
+      <Describe your scheduled background task and why contention occurs.
+      Example: "LaunchAgent daily extractor pipeline fires at <time>. SQLite
+      and vector-store contention stalls both processes, requiring
+      force-termination and manual recovery.">
+    blocks: [large extraction, vectorization, bulk database writes]
+    pre_check: "<command to check if the background task is currently running>"
+    enforcement: "L1 PreToolUse deny hook (Phase 3) — match extraction commands, check clock"
+
+ports:
+  # Services running locally on this machine
+  # Example entries — customize to your stack:
+  # ollama: 11434          # local LLM daemon
+  # mlx: 8090              # on-demand MLX server
+  # lm_studio: 1234        # manual LLM sandbox
+  # chrome_cdp: 9222       # Chrome DevTools Protocol (shared across scrapers)
+  <service_name>: <port>   # add your services here
+
+interpreters:
+  # Specify exact interpreter paths where bare commands may resolve incorrectly.
+  # Example: on macOS, bare 'python3' may resolve to a system Python (e.g. 3.9.x).
+  python_tests: python3.12   # use the version you've explicitly installed; verify with `which python3.12`
+
+memory_budget:
+  # Document any resource constraints that affect how skills and models are scheduled.
+  # Example: "two concurrent 50 GB MLX loads OOM this machine — R-SHARED-5 fall-through governs"
+  note: "<describe your memory constraints and which R-SHARED rule governs>"

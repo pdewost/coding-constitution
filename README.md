@@ -1,170 +1,226 @@
-# Antigravity
+# Coding Constitution — an Enforcement Regime for AI Coding Agents
 
-Behavioral guidelines and skill framework for AI coding agents working across multiple models and sessions.
+> Governance for agentic coding that you **run**, not just write down.
+> A ratified constitution, a harness-neutral enforcement layer, and the
+> adversarial-review harness used to harden them — extracted clean-room from a
+> real multi-project workspace.
 
-## What this is
+![License](https://img.shields.io/badge/license-MIT%20%2B%20CC--BY--4.0-blue)
+![Constitution](https://img.shields.io/badge/constitution-v1.0%20ratified-success)
+![Harness](https://img.shields.io/badge/adapter-Claude%20Code-informational)
+![Status](https://img.shields.io/badge/enforcement-self--tested-success)
 
-Antigravity is a system of Markdown documents that make AI coding agents (Claude Code, Cursor, Gemini, Copilot, etc.) behave like disciplined engineers rather than eager interns. It addresses problems that emerge when agents work on real projects over time:
+---
 
-- **Context drift**: The agent forgets what it was doing after 20 tool calls
-- **Silent assumptions**: The agent picks an interpretation and never tells you
-- **Sycophantic compliance**: The agent does what you ask even when it will break things
-- **Session amnesia**: A new session starts from scratch, re-discovering everything
-- **Skill duplication**: The agent writes a utility that already exists in the project
+## The problem
 
-### The tier system
+AI coding agents are capable and confident — and that's the hazard. A `CLAUDE.md`
+full of good intentions changes nothing the moment the model is mid-task and
+under pressure. Rules that live only in prose get skimmed, then ignored.
 
-Antigravity organizes project knowledge into a strict hierarchy. Each tier has a different scope, owner, and change frequency:
+**The thesis: a rule you can't enforce is a rule you don't have.**
+Every governing decision is pushed down to the cheapest medium that can *make it
+true* — a hook, a permission, a test, a skill — and only what genuinely can't be
+mechanized is left as prose.
 
-| Tier | File | Scope | Changes when... |
-|------|------|-------|-----------------|
-| **Tier 0** | `ANTIGRAVITY.md` | How the agent should *behave* — planning, verification, continuity | Rarely. Behavioral rules are stable. |
-| **Tier 1** | `*_SPEC.md` | Platform truths — encoding quirks, framework conventions, API gotchas | The platform changes (new OS, new framework major version). |
-| **Tier 2** | `PROJECT_BRIEF.md` | What *this project* does, its tech stack, safety constraints | The project scope changes. |
-| **Tier 2.5** | `BRAIN/` directory | Live state — what's running, what happened, what to do next | Every session. |
+> **The Sorting Rule.** A rule earns a place in the L0 Constitution *only* if it
+> cannot be expressed as a hook, a permission, a test, or a skill. Prose is the
+> medium of last resort.
 
-The agent loads them in order: Tier 0 first, then 1, then 2, then 2.5. Higher tiers override lower tiers only for current-state facts, never for behavioral rules. See [`docs/tier-architecture.md`](docs/tier-architecture.md) for the full explanation.
+---
 
-> **Note:** `PROJECT_BRIEF.md`, `BRAIN/`, `CLAUDE.md`, and `AGENTS.md` are user-created files that live in your own projects. They are not part of this repository — Antigravity only provides the behavioral master (`ANTIGRAVITY.md`), templates, and documentation.
+## What it actually enforces
 
-## How it compares to [agent-skills](https://github.com/addyosmani/agent-skills)
+These nine policies are defined once in `spec/POLICY_CORE.md` (harness-neutral)
+and translated by a thin per-harness adapter. The Claude Code adapter ships
+complete and self-tested:
 
-Addy Osmani's `agent-skills` is excellent — we adopted several of its ideas (anti-rationalization tables, confusion management, scope discipline). The two systems complement each other:
-
-| | agent-skills | Antigravity |
+| Policy | Fires on | Effect |
 |---|---|---|
-| **Target** | Single agent, single session, IDE | Multiple models, multiple sessions, any runtime |
-| **Skills** | Process docs (Markdown only) | Process docs + executable scripts + tests |
-| **Session continuity** | Not addressed | §10 LLM Continuity Protocol — cold-start handover is a hard requirement |
-| **Multi-model** | Not addressed | §8 Model routing protocol, §10 Dual-audience intelligibility |
-| **Environment awareness** | Not addressed | §2 Environment Detection — probes runtime before acting |
-| **Observability** | Verification checklists | Grep-able markers (`CONTRADICTION:`, `RISK:`, `NOTICED BUT NOT TOUCHING:`) |
-| **Skill isolation** | Global only | Global + Local Shadow override per project |
-| **Anti-rationalization** | In every skill (signature feature) | Adopted — recommended in SKILL.md template (§3.1) |
+| **ANCHOR** | session start / resume / compaction | injects cold-start context: Constitution pointer, the project's state manifest + status, a bounded skill index |
+| **GUARDRAIL** | every user prompt | a ≤4-line, task-aware reminder: planning → budgets + "PLAN before code" + *propose an adversarial review*; destructive → dry-run/apply gates; else → one rotated principle (rotation defeats habituation) |
+| **COMPILE-GATE** | after each file edit | syntax-checks the edited file (`py_compile` / `bash -n` / `osacompile`) and **blocks** with the error fed straight back |
+| **CLOSEOUT-GATE** | agent tries to end the turn | **blocks once** if code was edited but no verification ran, or the journal blew its size bound |
+| **VERIFY-GATE** | a code-edited turn completes | checks for an **independently-anchored** verdict — a reviewer that could not see the author's intent (subagent / stateless API / CI / human); **advisory** where un-anchored, blocking once a project is armed; a change-set-bound, single-use receipt (`_skills/verify_gate`) |
+| **DENY-ARCHIVE** | before tool run | denies `rm`/`mv`/`find -delete`/`xargs` etc. that would delete or move an archive *out* |
+| **DENY-CONTACT-DELETE** | before tool run | denies irreversible `delete person` AppleScript (born from a real data-loss incident) |
+| **DENY-WINDOW** | before tool run | denies heavy extraction/vectorization during machine-specific forbidden windows |
+| **PUSH-AUDIT** | after `git push` | feeds back a 6-check repo-hygiene audit |
 
-**Use agent-skills** if you work primarily in one IDE with one model on greenfield projects.
-**Use Antigravity** if you orchestrate multiple models, maintain long-lived projects, or need verifiable behavioral compliance.
-**Use both**: Osmani's skills as process checklists, Antigravity as the behavioral + continuity layer.
+A denial isn't advice — it's a decision the harness obeys. For example, when the
+agent tries `osascript -e 'delete person 1'`, the hook returns:
 
-## Quick start
-
-### 1. Copy the behavioral master
-Place [`ANTIGRAVITY.md`](ANTIGRAVITY.md) at your workspace root. This is Tier 0 — it governs how every agent behaves regardless of project.
-
-### 2. Add to your agent's rules
-**Claude Code**: Reference it in your `CLAUDE.md`:
-```markdown
-## Load Order
-1. Read `ANTIGRAVITY.md` (Tier 0 — behavioral master)
+```json
+{ "hookSpecificOutput": { "hookEventName": "PreToolUse",
+  "permissionDecision": "deny",
+  "permissionDecisionReason": "DENY-CONTACT-DELETE (Art. 4 …): forbidden …" } }
 ```
 
-**Cursor**: Add to `.cursorrules`.
-**Gemini**: Include in your system prompt or `AGENTS.md`.
-**Any agent**: Paste it as the first message of a new session.
+> **Honest scope.** The deny-hooks are **defence-in-depth, not a sandbox.** They
+> match command text and stop the common and accidental cases; a determined shell
+> (variables, `eval`, `mv -t`, base64) can still evade them. The real protection
+> for irreversible actions is that *the human performs them manually.* This is
+> stated in the code, not hidden.
 
-### 3. Set up project tiers
-```
-your-workspace/
-├── ANTIGRAVITY.md              # Tier 0: Behavioral (you just added this)
-├── COLD_START.md               # Strategic Rebase Protocol
-├── _skills/                    # Global skill registry
-│   ├── your-skill/
-│   │   ├── SKILL.md
-│   │   └── scripts/
-│   └── ...
-├── your-domain/
-│   ├── CLAUDE.md               # Domain entry point (load order + safety rules)
-│   ├── DOMAIN_SPEC.md          # Tier 1: Platform truths
-│   └── your-project/
-│       ├── PROJECT_BRIEF.md    # Tier 2: Tactical goals
-│       └── BRAIN/              # Tier 2.5: Live cross-session state
-│           ├── JOURNAL.md
-│           ├── STATUS.md
-│           └── TASK.md
-```
+---
 
-### 4. Create skills
-Use the [`templates/SKILL.md.template`](templates/SKILL.md.template) to create skills with:
-- Purpose (doubles as discovery-time summary)
-- Interface (CLI + programmatic)
-- Common Gotchas
-- Anti-Rationalization table
-- Verification Protocol
-- Phase tag (ORIENT / PLAN / BUILD / VERIFY / SHIP)
+## The five layers
 
-See [`docs/skill-anatomy.md`](docs/skill-anatomy.md) for the full specification.
+| Layer | Holds | Medium |
+|---|---|---|
+| **L0 — Constitution** | `PAICodeConstitution-2026.md`: principles only | prose, ≤190 lines |
+| **L1 — Enforcement** | hooks, permissions, tests, CI | machine-executed; per-harness adapters in `adapters/` |
+| **L2 — Procedures** | the `_skills/` registry | skills, loaded on demand |
+| **L3 — Project state** | a `NEOCORTEX/` per project | per `spec/NEOCORTEX_SPEC.md` |
+| **L4 — Reference data** | routing policy, machine facts, specs | data files + specs |
 
-## Key concepts
+L3 (**NEOCORTEX**) keeps every project *cold-startable*: a bounded `MANIFEST.json`
++ `STATUS.md` + `JOURNAL.md` that a fresh agent session reads to know where it is,
+with size bounds the validator enforces — so context never silently rots.
 
-### Observability markers
-Behavioral rules can't be unit-tested. Antigravity solves this by requiring agents to emit specific string prefixes when certain situations arise:
+---
 
-| Marker | When it fires |
-|--------|--------------|
-| `CONTRADICTION:` | Agent discovers conflicting docs/code mid-execution |
-| `RISK:` | User's request would harm the codebase |
-| `NOTICED BUT NOT TOUCHING:` | Agent spots a defect outside current scope |
-| `Source:` | Agent introduces an API/command not previously used |
+## See it work (60 seconds)
 
-Grep your session transcripts for these markers to audit compliance. See [`docs/observability-markers.md`](docs/observability-markers.md).
+```bash
+git clone https://github.com/pdewost/coding-constitution
+cd coding-constitution
 
-### Governance checkpoints (§9bis)
-Rules loaded at session start decay as context fills up. §9bis defines mandatory self-reinforcement triggers: task-boundary re-reads, post-compaction re-anchoring, autonomy-proportional rigor, and drift detection (if the user has to remind you of a rule, something already went wrong). See the `Governance Checkpoints` section in [`ANTIGRAVITY.md`](ANTIGRAVITY.md).
+# Run the enforcement self-test — 23 fire/no-fire cases over the real hooks:
+bash adapters/claude-code/test_hooks.sh
 
-### Model routing advisory (§8)
-The model routing table is now an active protocol, not a passive reference. Before starting any execution phase, the agent must identify the prescribed model and warn the user if they're on a higher-cost model than the task requires.
+# Read the centerpiece (14 articles + 1 amendment, ≤190 lines):
+less PAICodeConstitution-2026.md
 
-The routing table maps task classes to cost *tiers* (cheapest / mid / top), not model names. A companion **Environment Model Registries** section hardwires the available models and their relative cost for each supported runtime — Claude Code, Google Antigravity, and OpenAI Codex — ranked cheapest → most expensive. For OpenAI Codex, reasoning level is a separate cost multiplier (up to 8×). The agent enumerates the applicable registry at session start so routing advice is always grounded in what is actually reachable.
-
-### Multi-model continuity
-When Model A runs out of context, Model B picks up cold using:
-- `COLD_START.md` — the rebase protocol
-- `BRAIN/` — live project state
-- In-code `# v4.7 FIX:` tags — grep-able change history
-
-See [`docs/multi-model-orchestration.md`](docs/multi-model-orchestration.md).
-
-### Operational safety
-When agents run alongside cron jobs, scheduled syncs, or other agents, temporal collisions corrupt data silently. Antigravity defines patterns for this: forbidden time windows, sentinel files, pre-flight process checks, and destructive mode gates. See [`docs/operational-safety.md`](docs/operational-safety.md).
-
-### Incident-driven safety rules
-The best safety rules trace back to real incidents: "NEVER use `delete person` — it destroyed data that iCloud propagated to every device within seconds." Each rule has a prohibition, a consequence, an alternative, and an incident reference. See [`docs/safety-rules.md`](docs/safety-rules.md).
-
-### Anti-rationalization
-LLMs generate plausible excuses for skipping steps ("this is too simple to need tests"). Each skill includes a table of common rationalizations paired with rebuttals. Adopted from [agent-skills](https://github.com/addyosmani/agent-skills) — credit where due.
-
-### Assume Independent Audit
-All agent outputs — code, documentation, logs, plans — are subject to evaluation by a third-party LLM with equivalent or superior capabilities. This principle pervades every section of `ANTIGRAVITY.md`: decisions must be traceable, artifacts self-consistent, and completion claims backed by verifiable evidence. The audit succeeds when there are no contradictions between what the code does, what the docs claim, and what the logs record.
-
-## Repository structure
-
-```
-antigravity/
-├── ANTIGRAVITY.md                  # Tier 0 behavioral master (copy to your workspace root)
-├── COLD_START.md                   # Strategic Rebase Protocol
-├── docs/
-│   ├── tier-architecture.md        # Tier 0/1/2/2.5 explained
-│   ├── observability-markers.md    # How to audit agent compliance
-│   ├── multi-model-orchestration.md # Cross-model continuity
-│   ├── skill-anatomy.md            # SKILL.md specification
-│   ├── example-tier1-spec.md       # Real Tier 1 spec (macOS Automation)
-│   ├── operational-safety.md       # Temporal constraints, collision windows, sentinel files
-│   └── safety-rules.md             # Incident-driven safety rule pattern
-├── skills/
-│   ├── strategic-rebase/SKILL.md   # Example: project onboarding skill
-│   └── example-applescript-bridge/SKILL.md  # Example: platform integration skill
-└── templates/
-    ├── SKILL.md.template           # Blank skill template
-    ├── CLAUDE.md.template          # Domain entry point template
-    └── PROJECT_BRIEF.md.template   # Project brief template
+# ...and the Declaration of AIndependence — the why: vendor / model / coder independence:
+less DECLARATION.md
 ```
 
-## Origin
+A hook that can't prove it fires is presumed dead (Art. 12) — so every policy
+ships with that matrix, and `verify_fires.py` reports which projects are actually
+armed.
 
-Antigravity was developed for a multi-project macOS automation workspace orchestrating Claude (Code + API) and Gemini across long-lived projects. The behavioral rules, skill framework, and continuity protocol evolved from real incidents — contact data destruction, session amnesia bugs, and the subtle failures that come from agents being too agreeable.
+---
 
-The name comes from the workspace where it was born. The metaphor: these guidelines push against the natural gravity of LLM behavior — the pull toward shortcuts, sycophancy, and forgetting.
+## Adopt it
+
+```bash
+# 1. Install the enforcement hooks into your workspace
+mkdir -p .claude/hooks && cp adapters/claude-code/hooks/* .claude/hooks/
+
+# 2. Fill in the two config templates (no machine-specific values ship in this repo)
+cp routing_policy.example.yaml   governance/routing_policy.yaml
+cp machine_config.example.yaml   governance/machine_config.yaml   # set your DENY-WINDOW bounds etc.
+
+# 3. Arm every migrated project (dry-run first; enforcement follows migration)
+python3 adapters/claude-code/install_adapters.py            # preview
+python3 adapters/claude-code/install_adapters.py --apply
+
+# 4. Give a project its L3 state, then validate it
+python3 adapters/claude-code/neocortex_manifest.py --regenerate /path/to/project
+python3 adapters/claude-code/neocortex_manifest.py --check       /path/to/project
+```
+
+Full procedure: `adapters/claude-code/README.md` (policy → mechanism map) and
+`spec/NEOCORTEX_SPEC.md §5` (migration).
+
+---
+
+## Adversarial review is built in — and was used on this repo
+
+The regime doesn't trust its own authors. `_skills/adversarial_review/` is a
+generic red-team harness with swappable lens-packs (plan / code / project /
+visual / ux): a **drafter** model proposes, a **different reviewer** model tries
+to refute, findings are merged and the caller blocks on the verdict.
+
+```bash
+python3.12 _skills/adversarial_review/scripts/assemble_review.py \
+  --pack plan --artifact NEOCORTEX/PLAN_feature_2026-07-01.md \
+  --tier skeptic --drafter <model-a> --reviewer <model-b>
+```
+
+This was not theoretical for this release:
+
+- The three core documents were adversarially reviewed before ratification —
+  the round caught **10+ HIGH findings**, several invisible to the drafter.
+- The L1 installer and hooks were red-teamed and **structurally hardened against
+  the symlink / intermediate-component / TOCTOU / FIFO-hang / hardlink-clobber
+  classes** before this repo was prepared. The file I/O walks each path
+  component with `O_NOFOLLOW` from a trusted anchor and refuses non-regular /
+  hardlinked targets — verified with reproducing exploit harnesses.
+
+---
+
+## Harness support
+
+The policy is harness-neutral; an adapter is a *dumb translator* into a harness's
+native mechanism. Adding a harness means writing an adapter, never rewriting a policy.
+
+- **Claude Code** — ships complete: hooks, installer, validator, fire-verifier, self-test.
+- **Google Antigravity** — `adapters/antigravity/AGENTS.md.template` entry-point template.
+- **Anything else** — implement `spec/POLICY_CORE.md`'s nine policies in your harness; PRs welcome.
+
+---
+
+## Repository layout
+
+```
+PAICodeConstitution-2026.md     # L0 — the centerpiece; read this first
+ANTIGRAVITY.md                  # 2025 predecessor — frozen archive, kept for lineage
+spec/
+  POLICY_CORE.md                # L1 — the eight enforcement policies (harness-neutral)
+  NEOCORTEX_SPEC.md             # L3 — the cold-startable project-state model
+adapters/
+  claude-code/                  # L1 adapter: hooks/ + installer + validator + self-test
+  antigravity/                  # AGENTS.md template for the Google Antigravity harness
+routing_policy.example.yaml     # L4 — task-class structure + hard rules (bind your models)
+machine_config.example.yaml     # L4 — machine-specific facts template (fill in your values)
+_skills/
+  UNIVERSAL_SKILL_SPEC.md       # L2 — skill lifecycle + cross-project contracts
+  adversarial_review/           # L2 — the red-team harness (lenses + scripts)
+LICENSE                         # MIT (code) + CC BY 4.0 (docs)
+```
+
+---
+
+## The Constitution at a glance
+
+14 articles + one amendment, ≤190 lines of prose:
+
+| | | | |
+|---|---|---|---|
+| 1 Evidence Before Done | 2 Surgical Integrity | 3 Honest Disambiguation | 4 Escalation by Irreversibility |
+| 5 Code / Data / State Separation | 6 Continuity Duty | 7 Skill Mandate | 8 Delegation |
+| 9 Routing (task classes, not models) | 10 Honest Reporting | 11 Amendment Doctrine | 12 Audit Reality |
+| 13 Prepare Before Acting | 14 Diagnostic Discipline | **Amendment I — Inviolability of Serving Artifacts** | |
+
+---
+
+## Status & maturity
+
+- **Constitution / NEOCORTEX_SPEC / UNIVERSAL_SKILL_SPEC** — v1.0, ratified 2026-06-10 after line-by-line + adversarial review.
+- **Claude Code adapter** — in daily use; self-tested; hooks adversarially hardened.
+- **Config files are *examples*** — they ship with placeholders and zero machine-specific values; you supply yours.
+- This is a working extraction of a personal regime, shared as a reference design. Expect to adapt it, not drop it in untouched.
+
+---
+
+## Lineage
+
+`PAICodeConstitution-2026.md` supersedes the 2025 `ANTIGRAVITY.md`, which is kept
+frozen here to show what the operational lessons were distilled *from*.
+
+---
+
+## Contributing
+
+Issues and PRs welcome — especially **new harness adapters** and **adversarial
+review lens-packs**. Changes to L0 prose follow the Constitution's own Amendment
+Doctrine (Art. 11): a dedicated review, and the 190-line budget must hold.
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+- **Code & adapters** (`adapters/`, `_skills/adversarial_review/scripts/`): **MIT**.
+- **Documentation** (Constitution, `ANTIGRAVITY.md`, `spec/`, skill docs & lenses): **CC BY 4.0**.
+
+See `LICENSE`.

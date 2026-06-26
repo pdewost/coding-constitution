@@ -273,12 +273,12 @@ This advisory is non-blocking — the user may proceed on any model — but it m
 - **Property List Awareness**: When reading/writing plist values, always coerce types explicitly. AppleScript's implicit coercion between `text`, `string`, and `Unicode text` is unreliable across macOS versions.
 
 ## 14. Operational Sync Safety
-**The "02:40 AM Window" Protocol.**
+**Respect your scheduled-task windows.**
 
-- **Collision Awareness**: The system HAS a critical daily task scheduled at **02:40 AM** via LaunchAgent.
-- **Forbidden Window**: Do NOT initiate large manual vectorization or extraction tasks between **22:30 PM and 02:40 AM**.
-- **Reason**: Database (SQLite) and Vector Store (ChromaDB) contention will cause both the manual and scheduled process to stall, requiring force-termination and manual recovery.
-- **Pre-Sync Check**: Always check for running background syncs (`ps aux | grep unified_extractor`) before starting a new one.
+- **Collision Awareness**: The system HAS a critical daily task scheduled at a scheduled time via LaunchAgent.
+- **Forbidden Window**: Do NOT initiate large manual vectorization or extraction tasks between **<forbidden-window-start> and <forbidden-window-end>**.
+- **Reason**: Database and vector store contention will cause both the manual and scheduled process to stall, requiring force-termination and manual recovery.
+- **Pre-Sync Check**: Always check for running background syncs (`ps aux | grep <your-extractor-process>`) before starting a new one.
 
 ## 15. Verification Protocol
 **Execute before returning control to the user.**
@@ -352,7 +352,7 @@ Notifications are opt-in, not default. A single-session fix or unplanned task ne
 | Priority | Channel | Runtime | Detection |
 |----------|---------|---------|-----------|
 | 1 | iMessage | Claude Code + iMessage MCP | `mcp__Read_and_Send_iMessages__send_imessage` available |
-| 2 | WhatsApp | OpenClaw | OpenClaw PAIA-integration plugin registered |
+| 2 | WhatsApp | (a messaging gateway) | gateway integration plugin registered |
 | 3 | In-conversation summary | Always | Last-resort fallback |
 
 **No personal data in ANTIGRAVITY.** Notification target (contact name or handle) is defined per-project in `CLAUDE.md` under the key `NOTIFICATION_TARGET`. If absent, fall back to in-conversation summary. Never hardcode a phone number, email, or handle in any shared document.
