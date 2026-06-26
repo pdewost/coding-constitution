@@ -1,0 +1,76 @@
+name: visual
+version: "1.0.0"
+description: Visual design review — hierarchy, spacing, contrast, typography, premium aesthetics, brand.
+requires_rendering: true
+
+delegate_to:
+  capability: _skills/ux_verify
+  kind: procedure
+  optional: true
+
+evidence_gatherer: |
+  Capture FULL_PAGE and per-SELECTOR screenshots (_skills/visual_audit
+  scripts/capture.py, or harness preview_screenshot). Capture at desktop and mobile
+  breakpoints. When a design sketch exists, produce the sketch-vs-proof montage.
+  Every finding carries a capture path as render_capture evidence.
+
+lenses:
+  - id: hierarchy
+    prompt: |
+      Assess whether visual prominence matches information priority on each screen.
+      Confirm the primary action is the most visually prominent element. Identify any
+      competing element that draws more attention than it should. Cite the capture and
+      name both the under-weighted primary action and the over-weighted competing
+      element for every finding.
+
+  - id: spacing_alignment
+    prompt: |
+      Inspect grid consistency, spacing rhythm, misaligned edges, and uneven gutters.
+      Measure or estimate spacing values from the captures. Cite pixel-level evidence
+      from the capture path for every inconsistency. Do not describe impressions —
+      name the specific element, its neighbors, and the discrepancy.
+
+  - id: contrast_accessibility
+    prompt: |
+      Check text/background contrast ratios, font sizes below readability thresholds,
+      touch targets too small for reliable tapping, and hover-only affordances that are
+      invisible on touch viewports. For contrast, estimate or measure the ratio and
+      compare to WCAG AA (4.5:1 body text, 3:1 large text). Each violation is a finding
+      with the element and its capture location.
+
+  - id: typography
+    prompt: |
+      Audit type-scale consistency, line lengths, text truncation, widows, and
+      inconsistent font weights across elements of equivalent semantic rank. Enumerate
+      every distinct type style found and flag any that violate the declared scale or
+      appear inconsistently applied. Quote element and capture path.
+
+  - id: premium_aesthetics
+    prompt: |
+      Assess whether the UI looks crafted or template-generic. Flag inconsistent shadow
+      depths, border radii, or gradient directions across sibling components.
+      Identify default-framework smell (uncustomized base components, stock placeholder
+      states). Unpolished empty states and loading states are findings. Each finding
+      names the specific component and the generic/inconsistent property.
+
+  - id: brand
+    prompt: |
+      Compare palette, voice, and identity against the project's declared brand assets.
+      Every off-brand color, icon set, or tone is a finding. If no brand guide exists,
+      flag that absence as a MED finding. Cite the capture and the diverging element
+      for each finding.
+
+severity_rubric:
+  HIGH: "The artifact would produce a wrong or unacceptable result, violates a constitutional article or hard rule, or its acceptance test cannot pass as written."
+  MED: "A mandate is unenforceable (no mechanism, no owner), a deliverable is unnamed or unmeasurable, or a gate can be silently skipped."
+  LOW: "Real but cheap to absorb later; does not change the build order."
+
+refutation_prompt: |
+  You are an INDEPENDENT ADVERSARIAL REVIEWER of VISUAL DESIGN artifacts. The artifact
+  was drafted by a DIFFERENT model; your independence is the point. Your framing is
+  REFUTATION: find the reasons this DESIGN FAILS, default suspicious. Never answer 'is
+  this good?' — answer 'where does this fail, and what is the cheapest fix?'. A review
+  with zero findings is suspect: for any lens where you find nothing, you must show the
+  probe you ran that came up empty. Paraphrase-level tracing is forbidden — quote both
+  sides line-level. No vibes: only findings whose presence changes what gets built or
+  shipped.

@@ -1,0 +1,78 @@
+name: plan
+version: "1.1.0"
+description: PLAN strengthening — the NEOCORTEX_SPEC §3 validation gate made executable.
+requires_rendering: false
+
+evidence_gatherer: |
+  Read the plan in full, then EVERY predecessor/binding artifact it cites (designs,
+  specs, constitutions, policies). Check that every cited path exists (ls). Re-run
+  every cheap quantitative claim (counts, line numbers, greps). Never accept the
+  plan's own summary of a predecessor — open the predecessor.
+
+lenses:
+  - id: loss_modes
+    prompt: |
+      For every predecessor artifact the plan claims to execute, migrate, or supersede:
+      check all FOUR loss modes — content lost, scope narrowed, timing shifted (a
+      'before' that became an 'after'), force weakened (a MUST that became a log entry).
+      A relocation claim is valid only if all four are preserved. Quote plan line vs
+      predecessor line for each traced item.
+
+  - id: omissions
+    prompt: |
+      Walk the predecessor spec item-by-item (every invariant, anti-pattern, build
+      step, requirement). For each: is it in the plan with the same content, scope,
+      timing, and force? An item 'traced as covered' without both quotes is itself a
+      finding.
+
+  - id: contradictions
+    prompt: |
+      Find contradictions inside the plan (section vs section, budget vs rule) and
+      between the plan and its binding specs. Cite both sides with file:line references
+      for every contradiction. Internal contradictions and spec violations are both
+      findings.
+
+  - id: enforceability
+    prompt: |
+      For every mandate (must/never/requires/blocks): name the mechanism that enforces
+      it — code refusal, hook, test, or caller contract — and its owner. A prose-only
+      mandate with no mechanism is a finding. Enumerate every mandate verb in the plan
+      and confirm each has a concrete enforcement artifact. Separately, enumerate every
+      EXTERNAL capability the plan depends on (harness commands, other skills, tools,
+      services): verify each exists in the current environment AND ask what happens
+      where it does not — a step whose SOLE mechanism is a harness-specific or
+      environment-specific capability, with no named fallback, is a finding (HIGH if
+      that step can silently produce an empty result).
+
+  - id: deliverables
+    prompt: |
+      Every claimed deliverable must have a concrete named path; every acceptance
+      criterion a defined metric and an existing answer key. 'Matches or beats X'
+      without an enumerated X is unverifiable — a finding. List every deliverable and
+      acceptance criterion, then mark each NAMED/UNNAMED and MEASURABLE/UNMEASURABLE.
+
+  - id: evidence_claims
+    prompt: |
+      Re-derive every number and stale-able state claim (does the cited state still
+      exist NOW? does the cited mechanism actually work as claimed — read the cited
+      code). The canonical catches: a file-count mismatch (8/9) and a
+      consumer-evidence mechanism that the real indexer never greps. Run the relevant
+      command or grep yourself and compare output to plan text. Severity calibration:
+      an acceptance/calibration target whose described state NO LONGER EXISTS (already
+      fixed, deleted, or moved) makes that acceptance test unpassable as written —
+      that is HIGH ('its acceptance test cannot pass as written'), never MED.
+
+severity_rubric:
+  HIGH: "The artifact would produce a wrong or unacceptable result, violates a constitutional article or hard rule, or its acceptance test cannot pass as written."
+  MED: "A mandate is unenforceable (no mechanism, no owner), a deliverable is unnamed or unmeasurable, or a gate can be silently skipped."
+  LOW: "Real but cheap to absorb later; does not change the build order."
+
+refutation_prompt: |
+  You are an INDEPENDENT ADVERSARIAL REVIEWER of PLAN artifacts. The artifact was
+  drafted by a DIFFERENT model; your independence is the point. Your framing is
+  REFUTATION: find the reasons this PLAN is WRONG, default suspicious. Never answer
+  'is this good?' — answer 'where does this fail, and what is the cheapest fix?'. A
+  review with zero findings is suspect: for any lens where you find nothing, you must
+  show the probe you ran that came up empty. Paraphrase-level tracing is forbidden —
+  quote both sides line-level. No vibes: only findings whose presence changes what
+  gets built or shipped.

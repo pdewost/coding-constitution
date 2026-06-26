@@ -1,0 +1,20 @@
+# Lens-pack schema definition for adversarial_review
+# validate_pack.py reads this file generically to drive validation.
+# Format:
+#   required: mapping of key → type descriptor
+#   optional: mapping of key → type descriptor
+# Type descriptors: str, bool, semver, non_empty_list_of_lens, severity_rubric_map, str_map, delegate_map
+
+required:
+  name: str
+  version: semver
+  description: str
+  requires_rendering: bool
+  evidence_gatherer: str
+  lenses: non_empty_list_of_lens
+  severity_rubric: severity_rubric_map
+  refutation_prompt: non_empty_str
+
+optional:
+  delegate_to: delegate_map
+  notes: str

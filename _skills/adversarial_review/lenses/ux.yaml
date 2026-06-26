@@ -1,0 +1,125 @@
+name: ux
+version: "1.1.0"
+description: UX flow review — dual walkthrough, walk-map, crumb-hunt, persona panel, Nielsen heuristics, dead-end recovery, and core-experience against a RUNNING app.
+requires_rendering: true
+
+delegate_to:
+  capability: _skills/ux_verify
+  kind: procedure
+  optional: true
+
+evidence_gatherer: |
+  Exercise the RUNNING app via the harness browser/preview tools (or
+  _skills/visual_audit capture for static states). Screenshot every step
+  (render_capture evidence). Capture browser console and network logs during every
+  exercised flow. Resize for mobile viewport. Text-only review of UI is invalid by
+  design — if you cannot render, refuse.
+
+lenses:
+  - id: dual_walkthrough
+    prompt: |
+      Walk the complete flow desktop-first, then repeat on a mobile viewport.
+      Screenshot each step. Every divergence, breakage, or layout collapse between the
+      two runs is a finding with both captures cited as render_capture evidence. Do not
+      summarize — enumerate every screen and its state on each viewport.
+
+  - id: walk_map
+    prompt: |
+      Enumerate every reachable path, link, and CTA from the entry point; build the
+      full reachability map. Identify orphan pages (no inbound link), structural dead
+      ends (a NORMAL/happy-path screen with no meaningful next action), and circular
+      traps (loops with no escape). Scope: the app as-built under valid input only —
+      error and edge states are the dead_end_recovery lens's job, not yours; do not
+      re-file an error-state dead end here. Each is a finding with the path that leads
+      there.
+
+  - id: crumb_hunt
+    prompt: |
+      Hunt broken links, 404s, and console errors; zero tolerance for 4xx/5xx during
+      any exercised flow. Check every fetch/XHR URL for whitespace bugs including
+      malformed template literals. Capture literal console output and network request
+      log for every flow exercised. Any error that surfaces is a finding with its
+      literal log line.
+
+  - id: persona_non_geek
+    prompt: |
+      Adopt the persona of a non-technical first-time visitor. On each screen: is it
+      clear within ~10 seconds what this does and what to do next? Every point of
+      hesitation, ambiguity, or required prior knowledge is a finding with a screenshot
+      capture. Record the exact screen state and element that caused hesitation.
+
+  - id: persona_copywriter
+    prompt: |
+      Refute the copy as a professional copywriter: flag jargon, redundancy, buried
+      value propositions, and weak or competing calls-to-action. For each finding,
+      propose the cheapest rewrite (one sentence or less) that fixes the issue. Quote
+      the original text and your replacement.
+
+  - id: persona_skeptic_lawyer
+    prompt: |
+      Refute the claims as a skeptical lawyer: identify overpromises, missing
+      disclaimers, trust gaps, and consent or personal-data surfaces presented without
+      explanation. Every claim that cannot be substantiated and every data surface
+      without a stated policy is a finding. Cite the exact UI element and its location.
+
+  - id: nielsen_heuristics
+    prompt: |
+      Walk the running app against Nielsen's 10 usability heuristics (NN/g) and flag each
+      violation with a screenshot: (1) visibility of system status — is the user ever left
+      guessing whether something is loading / saved / failed? (2) match to the real world —
+      jargon or system-speak instead of the user's language; (3) user control & freedom — no
+      clear undo / cancel / exit from a state; (4) consistency & standards — the same action
+      looks or behaves differently across screens; (5) error PREVENTION — a destructive or
+      irreversible action with no confirmation or guard; (6) recognition over recall — the
+      user must remember data from a previous screen; (7) flexibility & efficiency — no
+      shortcut for the frequent path; (8) aesthetic & minimalist — noise competing with the
+      primary action; (9) help users recover from errors — an error with no plain-language
+      cause or next step; (10) help & documentation — a non-obvious feature with no inline
+      guidance. Source each finding to the heuristic number + NN/g
+      (https://www.nngroup.com/articles/ten-usability-heuristics/). Cite the exact screen + element.
+      SCOPE FENCE — to avoid double-filing: heuristics 1, 3, and 9 concern error/recovery
+      behaviour, which is owned by the dead_end_recovery lens. File a finding under THOSE
+      three numbers here ONLY when the defect appears on a normal, non-error screen
+      (e.g. no save/loading indicator on a happy-path form, no cancel on a multi-step
+      wizard); any defect you observe by driving the app INTO a failure state belongs to
+      dead_end_recovery, not here.
+
+  - id: dead_end_recovery
+    prompt: |
+      Drive the app into every failure and edge state you can reach — empty inputs, invalid
+      data, a network failure, the back button mid-flow, a refresh mid-flow, an expired or
+      not-ready state. Scope: ONLY states reached by driving the app into failure — the
+      happy-path reachability graph is walk_map's job. For each: can the user SEE what went
+      wrong (a plain cause), and is there a clear path to recover or continue? An ERROR/edge
+      state with no forward action AND no back / undo is a dead end (finding); an error that
+      only says "something went wrong" with no recovery is a finding; a flow that LOSES the
+      user's input on an error is a HIGH finding. This lens — not nielsen_heuristics — owns
+      every error-recovery and error-visibility defect; if nielsen flagged the same error
+      state, that is a duplicate and this lens's finding wins. Capture each state and cite it.
+
+  - id: core_experience
+    prompt: |
+      Identify the app's ONE core job (the reason it exists) and walk it end to end as a
+      first-time user: entry → first meaningful value → the natural next step (save / share /
+      repeat). Time it and count the steps. Scope: this lens is the ONLY one that judges the
+      end-to-end path TO first value as a whole — its required output is the step count, the
+      wall-clock time, and the single highest-friction step on the critical path. Per-screen
+      clarity hesitations are persona_non_geek's job; report a stall here only when it blocks
+      or delays reaching first value (not mere cosmetic ambiguity). Every point where a
+      first-timer would stall, mis-click, or abandon before reaching first value is a finding;
+      if the core job cannot be completed without undocumented knowledge, that is a HIGH
+      finding. Cite each step's screenshot and the stall.
+
+severity_rubric:
+  HIGH: "The artifact would produce a wrong or unacceptable result, violates a constitutional article or hard rule, or its acceptance test cannot pass as written."
+  MED: "A mandate is unenforceable (no mechanism, no owner), a deliverable is unnamed or unmeasurable, or a gate can be silently skipped."
+  LOW: "Real but cheap to absorb later; does not change the build order."
+
+refutation_prompt: |
+  You are an INDEPENDENT ADVERSARIAL REVIEWER of UX flows. The artifact was drafted
+  by a DIFFERENT model; your independence is the point. Your framing is REFUTATION:
+  find the reasons this UX FAILS, default suspicious. Never answer 'is this good?' —
+  answer 'where does this fail, and what is the cheapest fix?'. A review with zero
+  findings is suspect: for any lens where you find nothing, you must show the probe
+  you ran that came up empty. Paraphrase-level tracing is forbidden — quote both sides
+  line-level. No vibes: only findings whose presence changes what gets built or shipped.
