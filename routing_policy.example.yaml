@@ -1,0 +1,141 @@
+# routing_policy.example.yaml — L4 reference data (PAICodeConstitution-2026, Art. 9)
+#
+# TEMPLATE — copy to governance/routing_policy.yaml and customize.
+# Model names and effort preferences are environment-specific; this file
+# shows the task-class structure and hard rules. Replace placeholder values
+# (in angle brackets) with your actual resolver bindings.
+#
+# v1.0 RATIFIED 2026-06-10. Perishable by design; amended freely via git, never via the Constitution.
+# Plans and budgets declare TASK CLASSES from this file, never model names.
+# The binding to a concrete model@effort happens at execution time, against the
+# live inventory of the current environment, via the resolver (built in rollout
+# plan Phase 4).
+# Machine-specific facts (ports, forbidden windows): machine_config.example.yaml.
+
+version: 1.0
+updated: YYYY-MM-DD    # fill in your adoption date
+
+# ── Hard rules — outrank ALL cost and preference logic ──────────────────────
+# Precedence among hard rules: pii-local-only outranks everything, including
+# tier prescriptions. If a PII-bound task demands a tier with no local model,
+# DEGRADE the tier, log the deviation in the plan's execution log, and proceed
+# locally. PII never trumps-up to the cloud; tier always trumps-down to local.
+hard_rules:
+  - id: pii-local-only
+    rule: >
+      Content containing personal data (contacts, messages, bills, photos,
+      health, finance) is processed by LOCAL models only. Cloud egress of such
+      content requires an explicit, per-corpus, user-sanctioned exception
+      recorded in the project's NEOCORTEX (Constitution Art. 5).
+  - id: verifier-not-drafter
+    rule: >
+      Where stakes are high — irreversible changes, published artifacts,
+      claimed sprint completion (Constitution Art. 1) — verification uses a
+      different model than the one that produced the artifact under review.
+      Provenance: the per-sprint telemetry line records which model drafted
+      and which verified. If hard rule pii-local-only leaves only one capable
+      local model, use a different model FAMILY for verification where one
+      exists; otherwise log the single-model deviation explicitly.
+  - id: escalate-on-irreversibility
+    rule: >
+      Tier and effort scale with irreversibility, blast radius, and granted
+      autonomy — not difficulty (Constitution Art. 4). Destructive task
+      classes may never be downgraded for cost reasons.
+
+# ── Task classes — what plans declare ───────────────────────────────────────
+# tier vocabulary: cheapest | mid | frontier  (resolved against live inventory)
+task_classes:
+  mechanical:
+    description: bulk search, renames, scaffolding, format conversion, inventory
+    tier: cheapest
+    effort: low
+    delegate: freely (Art. 8)
+  implementation:
+    description: well-specified code edits, scripts, migrations covered by tests
+    tier: mid
+    effort: medium
+  reasoning:
+    description: planning, architecture, risk analysis, debugging unknowns,
+      governance drafting
+    tier: frontier
+    effort: high
+    anti_pattern: do not use for routine work — causes overthinking
+  adversarial:
+    description: audits, verification gates, security review, fabrication checks
+    tier: frontier
+    effort: high
+    constraint: model MUST differ from the drafting model (hard rule verifier-not-drafter)
+  cold_start_drill:
+    description: continuity acceptance test — fresh agent, artifacts only,
+      scored on next-action correctness and Art. 6 intelligibility
+    tier: cheapest
+    effort: medium
+    rationale: continuity that only works for frontier readers fails the
+      portability requirement; the drill DELIBERATELY uses a cheap reader
+  creative:
+    description: voice, narrative, literary or visual quality
+    tier: per-project policy
+    pattern: >
+      Pattern: bulk/connective work on local distilled models at zero cost;
+      the ~10% highest-density "soul" passages on cloud frontier; back-translation
+      fidelity checks on a THIRD model so no leg rubber-stamps its own work.
+      Record the specific resolution in the project's NEOCORTEX PROTOCOL doc.
+  destructive:
+    description: deletes, schema migrations, irreversible applies, publication
+    tier: frontier
+    effort: high
+    gates: [dry-run default, explicit apply confirmation, Art. 1 evidence log]
+    delegate: never (Art. 8)
+
+# ── Effort vocabulary ────────────────────────────────────────────────────────
+effort:
+  low:    minimal thinking — crystal-clear, reversible, cost-sensitive
+  medium: default for specified work
+  high:   underspecified problems, irreversible changes, governance text
+  escalation: per-prompt only (e.g. "ultrathink"); never a standing session
+    default; session-wide max is forbidden
+
+# ── Deviation advisory — surface BEFORE execution, log after ────────────────
+# Restores ANTIGRAVITY-2025 §8 "Active Advisory Rule".
+# Direction semantics adapted from sprint_router.
+deviation_advisory:
+  when: the resolved model@effort differs from the PLAN's declared class budget
+  format: >
+    One line, BEFORE the sprint's first tool action, never buried mid-paragraph:
+    "ROUTING ADVISORY <direction>: plan budgets <class>@<effort>; session runs
+    <model>@<effort> — <reason>. <Proceeding | Awaiting go>."
+  directions:
+    escalation:  # running a MORE expensive tier than budgeted
+      rule: requires explicit user go BEFORE proceeding — unless the deviation
+        originates from an explicit user ruling, which the advisory cites
+        (then surface and proceed)
+    downshift:   # running a CHEAPER tier than budgeted
+      rule: surface and proceed (the user sees the saving); destructive classes
+        may never downshift (hard rule escalate-on-irreversibility)
+  after: log the deviation in the telemetry line below
+
+# ── Ceiling rule — main loop is the capability ceiling; delegate down ────────
+ceiling_rule:
+  ceiling: the current main-loop model@effort, sticky across chained sprints
+  subagent_cap: >
+    A delegated subagent resolves to its task class's tier, then is CLAMPED to
+    <= ceiling. Never spawn a subagent above the main loop. Fully automatable —
+    the Phase 4 resolver enforces the clamp.
+  stickiness: >
+    Do not switch the main-loop model between sprints unless a task needs above
+    the ceiling. Model churn breaks sprint chaining and is the anti-pattern this
+    rule exists to prevent.
+  escalation:
+    detection: when a task class resolves ABOVE the ceiling, FLAG it (one-line
+      advisory). The agent CANNOT switch the main-loop model — only the user can.
+    non_destructive: cap to ceiling, proceed, log the deviation (telemetry).
+    destructive_or_irreversible: do NOT run capped — AWAIT the user's ceiling
+      raise (hard rule escalate-on-irreversibility outranks stickiness).
+
+# ── Telemetry — the record calibrates the policy, not prophecy ──────────────
+telemetry:
+  per_sprint: append one line to the plan's execution log —
+    "Sprint N completed: <class> resolved to <model>@<effort> | drafted-by <model>
+     / verified-by <model> | <n> tasks | <date> | deviation: <none or reason>"
+  review: at each Constitutional Review (Art. 11), reconcile recorded usage
+    against this file and adjust classes/tiers from evidence

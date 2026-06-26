@@ -273,12 +273,12 @@ This advisory is non-blocking — the user may proceed on any model — but it m
 - **Property List Awareness**: When reading/writing plist values, always coerce types explicitly. AppleScript's implicit coercion between `text`, `string`, and `Unicode text` is unreliable across macOS versions.
 
 ## 14. Operational Sync Safety
-**The "02:40 AM Window" Protocol.**
+**Respect your scheduled-task windows.**
 
-- **Collision Awareness**: The system HAS a critical daily task scheduled at **02:40 AM** via LaunchAgent.
-- **Forbidden Window**: Do NOT initiate large manual vectorization or extraction tasks between **22:30 PM and 02:40 AM**.
-- **Reason**: Database (SQLite) and Vector Store (ChromaDB) contention will cause both the manual and scheduled process to stall, requiring force-termination and manual recovery.
-- **Pre-Sync Check**: Always check for running background syncs (`ps aux | grep unified_extractor`) before starting a new one.
+- **Collision Awareness**: The system HAS a critical daily task scheduled at a scheduled time via LaunchAgent.
+- **Forbidden Window**: Do NOT initiate large manual vectorization or extraction tasks between **<forbidden-window-start> and <forbidden-window-end>**.
+- **Reason**: Database and vector store contention will cause both the manual and scheduled process to stall, requiring force-termination and manual recovery.
+- **Pre-Sync Check**: Always check for running background syncs (`ps aux | grep <your-extractor-process>`) before starting a new one.
 
 ## 15. Verification Protocol
 **Execute before returning control to the user.**
