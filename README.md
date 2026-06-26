@@ -97,7 +97,7 @@ less DECLARATION.md
 ```
 
 A hook that can't prove it fires is presumed dead (Art. 12) — so every policy
-ships with that matrix, and `verify_fires.py` reports which projects are actually
+ships with that matrix, and `adapters/claude-code/verify_fires.py` reports which projects are actually
 armed.
 
 ---
