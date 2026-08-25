@@ -1,8 +1,8 @@
 ---
 name: adversarial_review
-version: 0.9.0
+version: 1.1.0
 kind: procedure
-status: incubating
+status: active
 description: One red-team harness + swappable lens-packs (plan/code/project/visual/ux) — independent refutation reviews returning evidence-backed findings and a blocking-ready verdict
 interface:
   - "agent procedure: execute the numbered steps in §Procedure below"
@@ -13,7 +13,7 @@ env: []
 requires: []
 ---
 
-# SKILL: adversarial_review (v0.9.0)
+# SKILL: adversarial_review (v1.1.0)
 
 **Purpose** — The single adversarial-review mechanism for every gate that the
 PAICodeConstitution-2026 regime declares: NEOCORTEX_SPEC §3 PLAN validation,
@@ -113,6 +113,25 @@ blocks anything itself — the CALLER blocks.**
 
 ## CHANGELOG
 
+- **1.1.0** (2026-07-27) — Added the falsification-condition requirement (R2) to the
+  shared output contract in `scripts/assemble_review.py` (`_build_prompt_text` §EVIDENCE
+  REQUIREMENTS — pack-agnostic, applies to every pack automatically): every finding's
+  `claim` and every verdict's `probe` must now state what evidence would prove it wrong,
+  with extra force on any downgrade. Rationale: a downgrade is more dangerous than an
+  omission — an omitted finding stays discoverable, a downgraded one is marked safe, so
+  no one looks again. Reference incident (PROJECT-A, 2026-07-27): a refuter lens downgraded
+  three findings HIGH→LOW by correctly showing the project's prescribed remedy was a
+  no-op — a correct answer to the wrong question (it never tested whether the underlying
+  sites were sound). One of the three downgraded sites took the deploy gate down hours
+  later; the actual defect (inconsistent timeouts across the suite) was in plain sight but
+  never named because no falsification condition was demanded.
+- **1.0.0** (2026-06-27) — S6 calibration gate PASSED (C0 cycle 2 / C1 / C2 / C3 all 100%
+  HIGH recall; C4 rendering-blocked, deferred to first real run). Inline review due to
+  monthly spend limit; scorer=reviewer deviation noted in
+  `governance/AUDIT_adversarial_S6_calibration_2026-06-27.md`. Status promoted:
+  `incubating → active`. First production use: PROJECT-B broad review 2026-06-10 (pre-promotion,
+  recorded as second production use in OPEN_WORK). All probes independently reproducible.
+  drafted-by Sonnet 4.6 / scored-by Sonnet 4.6 (deviation per AUDIT).
 - **0.9.0** (2026-06-10) — Initial build per `PLAN_adversarial_review_skill_2026-06-10.md`
   (S0–S5). Status `incubating` until the S6 calibration gate (C0–C4) passes and the
   first production consumer invokes it; then 1.0.0 / `active`.

@@ -2,7 +2,7 @@
 
 **Status: v2.0 — RATIFIED 2026-06-10** with PAICodeConstitution-2026 (Art. 7).
 Supersedes v1.1 (archived: `governance/_archive/UNIVERSAL_SKILL_SPEC_v1.1.md`).
-This file — `_skills/UNIVERSAL_SKILL_SPEC.md` in the adopting workspace — is the canonical location all
+This file — `_skills/UNIVERSAL_SKILL_SPEC.md` — is the canonical location all
 consumers reference; it is **L4 reference data**: amended freely via git.
 
 **What changed from v1.1 and why** (evidence: 2026-06-10 skills audit):
@@ -84,10 +84,26 @@ time; full SKILL.md only when the skill is selected.
   (**≤40 lines**; `archived` skills excluded from the default view).
 - Registration of a new skill = run `build_index.py`. Nothing else.
 - The index generator FAILS loudly on: missing frontmatter, missing SKILL.md,
-  version in frontmatter ≠ version in title line. An `active` skill with
-  failing tests is **demoted to a flagged state in the index** (visible to
-  every session) — it does not fail the build; one broken skill must never
-  block fleet-wide registration.
+  version in frontmatter ≠ version in title line (and ≠ `metadata.json` version
+  for skills that ship one). "Fails loudly" = the mismatch is always printed to
+  stderr naming the offending field; under `--strict` it also exits non-zero.
+  An `active` skill with failing tests is **demoted to a flagged state in the
+  index** (visible to every session) — it does not fail the build; one broken
+  skill must never block fleet-wide registration.
+
+> **Footgun — manual consumer-count greps UNDERCOUNT on this machine.** `_skills/*`
+> is `.gitignore`'d (only `build_index.py` is tracked; `index.json`,
+> `SKILLS_INDEX.md`, and every `<skill>/SKILL.md` are untracked). This machine's
+> interactive shell backs `rg`/`grep -r` with a **gitignore-aware** searcher, so a
+> casual `rg 'from linkedin_scraper'` or `grep -r … _skills/` silently skips the
+> gitignored tree and reports **fewer consumers than exist** — the exact trap that
+> makes a hand-count contradict the generated index. To count by hand, defeat the
+> gitignore filter: `find <root> -name '*.py' -exec grep -l <pat> {} +` or
+> `command grep -r` / the real `/usr/bin/grep` (the raw grep binary never reads
+> `.gitignore`). `build_index.py` itself is **unaffected** — it shells out to the
+> `grep` *binary* via `subprocess` with explicit `--exclude-dir`, which is
+> gitignore-agnostic by construction; this warning is only for humans/agents doing
+> ad-hoc counts.
 
 ## 5. Interface contract & deprecation (the Bezos rule)
 
@@ -124,10 +140,10 @@ time; full SKILL.md only when the skill is selected.
   index view, and may be revived by any future consumer. (NEOCORTEX
   principle: archives exist and are declared.)
 
-## 7. Cross-Project Runtime Contracts (R-SHARED-1..6)
+## 7. Cross-Project Runtime Contracts (R-SHARED-1..5)
 
 Carried over from v1.1 in substance, unchanged — these rules are battle-tested
-(formalized after the `local_llm` OOM-hazard audit):
+(formalized 2026-05-07 after the `local_llm` OOM-hazard audit):
 
 - **R-SHARED-1** — No project-specific imports inside skill code. Config via
   constructor args or namespaced env vars.
@@ -145,7 +161,7 @@ Carried over from v1.1 in substance, unchanged — these rules are battle-tested
 - **R-SHARED-5** — Memory-pressure default is fall-through, not block; opt-in
   waiting for consumers that need a specific backend. Tests must cover both.
 - **R-SHARED-6** — Skill state: **skills hold no `BRAIN/` or `NEOCORTEX/`** (NEOCORTEX is L3
-  project state; a skill is an L2 library).
+  project state; a skill is an L2 library — `governance/DECISION_skill_state_policy_2026-06-13.md`).
   Durable operational rules live under a dedicated `SKILL.md` `## Operational Rules` heading (kept
   separate from the interface contract and the Changelog); version history is the mandated `SKILL.md`
   Changelog (R-SHARED-4); cross-consumer change coordination is delegated to consumers' NEOCORTEX.
@@ -158,6 +174,5 @@ any breaking change.
 
 ## 8. Testing
 
-v1.1 rules unchanged: `python3.12 -m pytest tests/ -v` (use `python3.12`
-explicitly — bare `python3` may resolve to a system Python with an old version);
-all green before `status: active`.
+v1.1 rules unchanged: `python3.12 -m pytest tests/ -v` (never bare `python3` —
+resolves to Xcode 3.9.6 on this machine); all green before `status: active`.

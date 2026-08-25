@@ -51,7 +51,7 @@ def _safe_append(root: Path, rel_parts: tuple, text: str) -> None:
 
 def block(reason: str) -> None:
     try:
-        _safe_append(ROOT, ("governance", "hook_telemetry.log"),
+        _safe_append(ROOT, ("governance", "pilot_telemetry.log"),
                      f"{datetime.datetime.now().isoformat(timespec='seconds')} COMPILE-BLOCK {reason[:60]}\n")
     except OSError:
         pass

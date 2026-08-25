@@ -2,7 +2,7 @@
 
 > **SUPERSEDED** — see `PAICodeConstitution-2026.md` (L0, ratified 2026-06-10).
 
-This file was the Tier 0 behavioral master for the Antigravity / PROJECT-B fleet.
+This file was the Tier 0 behavioral master for the fleet this regime governs.
 It has been replaced by the PAICodeConstitution-2026 (14 articles, ratified 2026-06-10).
 
 **The original 2025 prose is retained in the private workspace archive.**

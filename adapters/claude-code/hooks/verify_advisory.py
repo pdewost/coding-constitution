@@ -10,7 +10,7 @@ are not yet verify-armed, with ZERO disruption to active development. A project 
 only when it is explicitly armed (a wired reviewer + a proven receipt) — that is a separate,
 opt-in step, NOT this hook.
 
-Design guarantees (see governance/policy/POLICY_CORE.md VERIFY-GATE):
+Design guarantees (see spec/POLICY_CORE.md VERIFY-GATE):
   - exit 0 always (advisory); the only block in the regime's verify path is the armed CLOSEOUT path.
   - change-set = the files edited this turn (from the transcript), never the whole repo.
   - fail-silent: any error => exit 0.

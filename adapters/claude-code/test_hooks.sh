@@ -2,7 +2,36 @@
 # test_hooks.sh — fire/no-fire matrix for every Claude Code L1 hook
 # (POLICY_CORE.md self-test duty, Constitution Art. 12). Run standalone or
 # from the monthly audit. Exit 0 = all green; non-zero = failures listed.
-ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+# Workspace root = nearest ancestor holding BOTH .claude/settings.json and .claude/hooks/.
+# Was a fixed "../../..", correct only for the private tree's layout; in the published kit
+# (one level shallower) $H pointed at a directory that did not exist and 13 of 23 cases
+# "failed" for want of a hook to run. Both markers are required because an ARMED project
+# carries settings.json alone and would otherwise be mistaken for the root.
+# --root PATH / $GOVERNANCE_WORKSPACE beat the upward search, which is announced when used.
+# bootstrap.sh installs into a workspace this script cannot infer when the kit lives outside
+# it -- the ordinary adopter layout -- and the old behaviour was to search upward and run
+# against whatever unrelated tree it happened to find, silently (§5.5 panel, three reviewers).
+ROOT=""
+if [ "${1:-}" = "--root" ] && [ -n "${2:-}" ]; then ROOT="$2"; shift 2
+elif [ -n "${GOVERNANCE_WORKSPACE:-}" ]; then ROOT="$GOVERNANCE_WORKSPACE"; fi
+if [ -n "$ROOT" ]; then
+  if [ ! -f "$ROOT/.claude/settings.json" ]; then
+    echo "root $ROOT has no .claude/settings.json - run bootstrap.sh there first" >&2; exit 2
+  fi
+else
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+while [ "$ROOT" != "/" ]; do
+  if [ -f "$ROOT/.claude/settings.json" ] && [ -d "$ROOT/.claude/hooks" ]; then break; fi
+  ROOT="$(dirname "$ROOT")"
+done
+if [ "$ROOT" = "/" ]; then
+  echo "could not locate a workspace root (.claude/settings.json + .claude/hooks/) above $(dirname "$0")" >&2
+  echo "  run: bootstrap.sh /path/to/workspace   then: $0 --root /path/to/workspace" >&2
+  exit 2
+fi
+  echo "workspace root (inferred): $ROOT" >&2
+  echo "  pass --root PATH or set \$GOVERNANCE_WORKSPACE to be explicit" >&2
+fi
 H="$ROOT/.claude/hooks"
 pass=0; fail=0
 
@@ -30,10 +59,9 @@ check "mv INTO _archive allowed"  silent "$(j 'mv NEOCORTEX/old.md NEOCORTEX/_ar
 check "normal rm is silent"       silent "$(j 'rm /tmp/scratch.txt' | "$H/pretool_guard.py")"
 check "normal command silent"     silent "$(j 'ls -la' | "$H/pretool_guard.py")"
 # DENY-WINDOW is time-dependent: assert correct behavior for the current clock.
-# Customize the window bounds below to match your machine_config.yaml forbidden_windows.
 hm=$((10#$(date +%H%M)))
 if [ $hm -ge 2230 ] || [ $hm -lt 240 ]; then expect_w=fire; else expect_w=silent; fi
-check "extraction vs window (now)" $expect_w "$(j 'python3 <your-extraction-script>.py --full' | "$H/pretool_guard.py")"
+check "extraction vs window (now)" $expect_w "$(j 'python3 unified_extractor.py --full' | "$H/pretool_guard.py")"
 
 echo "── postedit_compile_gate (COMPILE-GATE) ──"
 good="$(mktemp /tmp/hookt_XXXXXX).py"; echo 'x = 1' > "$good"
@@ -47,10 +75,10 @@ rm -f "$good" "$bad" "$badsh" /tmp/hookt_*.pyc 2>/dev/null
 
 echo "── stop_closeout_gate (CLOSEOUT-GATE) ──"
 t1=$(mktemp); cat > "$t1" <<'EOF'
-{"message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/tmp/a.py"}}]}}
+{"message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/workspace/proj/a.py"}}]}}
 EOF
 t2=$(mktemp); cat > "$t2" <<'EOF'
-{"message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/tmp/a.py"}}]}}
+{"message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/workspace/proj/a.py"}}]}}
 {"message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"python3.12 -m pytest tests/ -q"}}]}}
 EOF
 sj() { printf '{"transcript_path":"%s","stop_hook_active":%s}' "$1" "$2"; }
