@@ -16,7 +16,7 @@
 # option flags); a quoted literal like echo "git push" also matches — acceptable,
 # rare, and fails toward auditing rather than away from it.
 
-cmd=$(python3 -c '
+cmd=$(python3.12 -c '
 import json, sys
 try:
     data = json.load(sys.stdin)
@@ -27,7 +27,7 @@ except Exception:
 
 if printf '%s' "$cmd" | grep -qE '(^|[;&|[:space:]])git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?([[:space:]]+-[^[:space:]]+)*[[:space:]]+push([[:space:]]|$)'; then
   cat <<'JSON'
-{"decision": "block", "reason": "A git push just completed (post-push audit gate). Run the github_commit_audit post-push audit for the pushed repository now: (1) remote sync - git fetch origin && git diff HEAD origin/<branch> must be empty; (2) README vs reality - verify feature claims, version strings, and file paths against actual repo contents, flag phantom references with line numbers; (3) version-tag consistency - cross-check *.md version strings vs source code; (4) doc-code coherence - CHANGELOG / PROJECT_BRIEF / other docs match current state; (5) structural completeness - README, LICENSE, .gitignore present; TODO/FIXME in code (excluding string literals); (6) external-auditor test - could a cold-start LLM understand what this project does, what changed, and whether the change is complete from ONLY the README + last commit + file tree? Output the audit as a Check / Status / Evidence table; list remediation steps for any FAIL."}
+{"decision": "block", "reason": "A git push just completed (post-push audit gate — github_commit_audit). Run the TESTED audit SCRIPT (not a hand-derived checklist): `python3.12 _skills/github_commit_audit/scripts/post_audit.py --repo-path \"$(pwd)\" --repo-name <the pushed repo name>` (add `--deep` for a secrets scan). This executes the 42-test-covered audit logic — remote-sync, README-vs-reality, version-tag consistency, doc-code coherence, structural completeness, external-auditor test — instead of re-deriving those six checks by prose. Report the script's Check/Status/Evidence table and remediate any FAIL before proceeding. FALLBACK: if the script errors or is unavailable, run the six checks manually and report the error (never skip the audit). BYPASS a false-positive for one push by noting the reason and proceeding (founder-owned; set GHCA_AUDIT_BYPASS=1 to document it)."}
 JSON
 fi
 exit 0

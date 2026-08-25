@@ -1,8 +1,8 @@
 # PAICodeConstitution-2026
 
 > [!IMPORTANT]
-> **Status: RATIFIED v1.0 — 2026-06-10, after line-by-line review and an
-> adversarial review round.** Supersedes `ANTIGRAVITY.md` (2025;
+> **Status: RATIFIED v1.0 — 2026-06-10, after line-by-line
+> review and an adversarial review round.** Supersedes `ANTIGRAVITY.md` (2025;
 > frozen archive: `ANTIGRAVITY-2025.md`).
 > **Transitional clause:** articles bind each project at its NEOCORTEX
 > migration; index/resolver/hook-dependent clauses bind once that
@@ -28,7 +28,7 @@ and do no harm.
 
 | Layer | Holds | Medium | Amended |
 |---|---|---|---|
-| **L0 — Constitution** | This file: principles only | Prose, ≤190 lines (budget extended 2026-06-20 for the Independence Preamble; Amendment I, 2026-06-10) | Constitutional Review only (Art. 11) |
+| **L0 — Constitution** | This file: principles only | Prose, ≤190 lines (budget extended 2026-06-20 for the Independence Preamble; first amended at Amendment I, 2026-06-10) | Constitutional Review only (Art. 11) |
 | **L1 — Enforcement** | Hooks, permission rules, tests, CI | Machine-executed; per-harness adapters in `governance/adapters/` | Freely, via git |
 | **L2 — Procedures** | `_skills/` registry | Skills, loaded on demand | Per `UNIVERSAL_SKILL_SPEC` |
 | **L3 — Project state** | `NEOCORTEX/` in each project | Per `NEOCORTEX_SPEC` | Every working session |
@@ -132,7 +132,7 @@ default), and a **logged `CONTRADICTION:` against L0 itself** (Art. 3). The
 review asks of each article: "does this still bind correctly under current
 conditions?" Incidents and lessons land in L1 (hooks, tests) or L2 (skills) —
 **never** as new L0 prose. Every amendment is a git commit. **L0 never
-exceeds 190 lines** (budget extended 2026-06-20 for the Independence Preamble; Amendment I, 2026-06-10); an amendment that grows it must shrink it elsewhere or amend this budget in the same ratification.
+exceeds 190 lines** (budget extended 2026-06-20 for the Independence Preamble; first amended 2026-06-10 with Amendment I); an amendment that grows it must shrink it elsewhere or amend this budget in the same ratification.
 
 **Art. 12 — Audit Reality.** Compliance is verified, not assumed: scheduled
 independent audits and periodic cold-start drills (a fresh agent, artifacts

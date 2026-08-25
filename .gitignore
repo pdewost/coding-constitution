@@ -5,3 +5,13 @@ __pycache__/
 .pytest_cache/
 *.log
 .verify/
+
+# Harness working state — MUST be repo-local, not machine-local.
+# Until 2026-08-25 these were excluded only by ~/.config/git/ignore and .git/info/exclude,
+# NEITHER of which travels with a clone: two worktrees holding full copies of this tree sat
+# here protected by a file that is not in the repository. Public history is permanent.
+.claude/
+
+# Project-specific codename list for publish_scan.py — MUST stay untracked.
+# A published denylist containing the strings it protects is itself the leak.
+.publish_scan_terms

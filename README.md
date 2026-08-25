@@ -9,6 +9,30 @@
 ![Constitution](https://img.shields.io/badge/constitution-v1.0%20ratified-success)
 ![Harness](https://img.shields.io/badge/adapter-Claude%20Code-informational)
 ![Status](https://img.shields.io/badge/enforcement-self--tested-success)
+![Reviewed](https://img.shields.io/badge/reviewed-2026--08--25%20%C2%B7%200%20amendments-success)
+
+---
+
+## Reviews
+
+The constitution carries its own amendment doctrine (Art. 11): a **frontier-model generation
+change** convenes a review, which asks of every article only *"does this still bind correctly
+under current conditions?"*
+
+| Date | Scope | Outcome |
+|---|---|---|
+| [2026-08-25](reviews/REVIEW_2026-08-25.md) | All 14 articles + Preamble + Amendment I | **BIND-AS-IS. Zero amendments.** 188/190 lines, unchanged |
+
+The 2026-08-25 record is worth reading for the failure modes more than the verdict: an article
+that went missing from a ratification, a rule that bound a budget written to ignore it, tests that
+passed whether or not the fix was present, and a status indicator that showed green *because*
+things were bad. Every gap the review found was one layer below the constitution — which is the
+Sorting Rule working, not a gap in it.
+
+**Extraction integrity.** This repository is a clean-room extraction, not a mirror.
+[`redaction_map.yaml`](redaction_map.yaml) declares every intentional difference from the private
+source, and [`publish_scan.py`](publish_scan.py) enforces the pre-publish secrets gate as code —
+after a measurement found 6 of 8 published files had silently drifted from their originals.
 
 ---
 
@@ -86,8 +110,12 @@ with size bounds the validator enforces — so context never silently rots.
 git clone https://github.com/pdewost/coding-constitution
 cd coding-constitution
 
+# The hooks run from a workspace, so seed a throwaway one first (this is the step whose
+# absence made this quickstart fail on a fresh clone until 2026-08-25):
+./adapters/claude-code/bootstrap.sh /tmp/cc-demo
+
 # Run the enforcement self-test — 23 fire/no-fire cases over the real hooks:
-bash adapters/claude-code/test_hooks.sh
+bash adapters/claude-code/test_hooks.sh --root /tmp/cc-demo
 
 # Read the centerpiece (14 articles + 1 amendment, ≤190 lines):
 less PAICodeConstitution-2026.md
@@ -105,21 +133,44 @@ armed.
 ## Adopt it
 
 ```bash
-# 1. Install the enforcement hooks into your workspace
-mkdir -p .claude/hooks && cp adapters/claude-code/hooks/* .claude/hooks/
+# 1. Install the canonical hook set + settings into YOUR workspace root. NOTE: the tools do
+#    NOT remember this path — pass --root (or export GOVERNANCE_WORKSPACE) to every command
+#    below. Without it they search upward from their own location and may act on another tree.
+#    (The kit deliberately keeps ONE canonical copy; every armed project points at it
+#     by absolute path, so no project's hooks can drift from the source.)
+./adapters/claude-code/bootstrap.sh /path/to/your/workspace
 
-# 2. Fill in the two config templates (no machine-specific values ship in this repo)
-cp routing_policy.example.yaml   governance/routing_policy.yaml
-cp machine_config.example.yaml   governance/machine_config.yaml   # set your DENY-WINDOW bounds etc.
+# 2. Prove the hooks fire AND stay silent — 23 fire/no-fire cases
+bash adapters/claude-code/test_hooks.sh
 
-# 3. Arm every migrated project (dry-run first; enforcement follows migration)
-python3 adapters/claude-code/install_adapters.py            # preview
-python3 adapters/claude-code/install_adapters.py --apply
+# 3. Fill in the two config templates, in YOUR workspace (no machine-specific values ship here).
+#    `governance/` is a directory in your workspace, not in this repo — create it:
+mkdir -p /path/to/your/workspace/governance
+cp routing_policy.example.yaml /path/to/your/workspace/governance/routing_policy.yaml
+cp machine_config.example.yaml /path/to/your/workspace/governance/machine_config.yaml
 
-# 4. Give a project its L3 state, then validate it
-python3 adapters/claude-code/neocortex_manifest.py --regenerate /path/to/project
-python3 adapters/claude-code/neocortex_manifest.py --check       /path/to/project
+# 4. Arm every migrated project — dry-run first; enforcement follows migration
+python3.12 adapters/claude-code/install_adapters.py --root /path/to/your/workspace          # preview
+python3.12 adapters/claude-code/install_adapters.py --root /path/to/your/workspace --apply
+python3.12 adapters/claude-code/install_adapters.py --root /path/to/your/workspace --check  # drift check
+
+# 5. Give a project its L3 state, then validate it.
+#    --init originates a NEOCORTEX/ for a project that has none (the usual case);
+#    --regenerate only rebuilds files[] inside one that already exists.
+python3.12 adapters/claude-code/neocortex_manifest.py --init       /path/to/project
+python3.12 adapters/claude-code/neocortex_manifest.py --check      /path/to/project
+
+# 6. THE STEP PEOPLE SKIP: has a hook actually fired here, or is it merely installed?
+python3.12 adapters/claude-code/verify_fires.py --root /path/to/your/workspace
 ```
+
+**Step 6 is not a formality.** A project can sit armed for months without a hook ever
+running, and "installed" reads exactly like "working" until you look. In the workspace this
+was extracted from, the *governance* directory itself was excluded from adapter discovery by
+a one-line filter — so the enforcement layer had never once run on the project that defines
+it, and the tooling said nothing for months. `verify_fires.py` distinguishes **PROVEN** (a
+hook demonstrably fired from this path) from **PENDING** (armed, never fired). Until it says
+PROVEN, your enforcement is a plan, not a control.
 
 Full procedure: `adapters/claude-code/README.md` (policy → mechanism map) and
 `spec/NEOCORTEX_SPEC.md §5` (migration).

@@ -259,7 +259,17 @@ def _build_prompt_text(
         "UNSUBSTANTIATED and excluded from the verdict.\n"
         "\n"
         "For every lens where you find NO problems, you MUST still provide a verdict entry "
-        "with verdict=HOLDS and a non-empty probe field showing what you checked and confirmed."
+        "with verdict=HOLDS and a non-empty probe field showing what you checked and confirmed.\n"
+        "\n"
+        "Every finding's claim, and every verdict's probe, MUST state a falsification "
+        "condition: the specific evidence that would prove this verdict wrong. This applies "
+        "with EXTRA force to any DOWNGRADE — lowering a candidate finding's severity, or "
+        "resolving a lens to HOLDS despite a concern you noticed. A downgrade is MORE "
+        "dangerous than an omission, not less: an omitted finding stays discoverable by the "
+        "next reviewer; a downgraded one is marked safe, so no one looks again. Confirming "
+        "that a PRESCRIBED remedy is a no-op is not a falsification condition for the "
+        "underlying claim — it answers a different question. A verdict with no stated way "
+        "to be wrong is an opinion, not a review."
     )
     parts.append("")
 

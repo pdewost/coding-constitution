@@ -7,7 +7,7 @@
 # notice for non-migrated projects (transitional clause).
 # ROOT = the workspace root, derived from this script's own location — NOT from
 # CLAUDE_PROJECT_DIR, which equals the per-project dir when a session starts
-# inside a project (e.g. a sub-project's repo) and would break all governance paths.
+# inside a project (e.g. PROJECT-A's repo) and would break all governance paths.
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # Heartbeat: append timestamp+PWD via an O_NOFOLLOW open of every path component, so a
 # symlink/hardlink planted at the log path can't redirect or clobber another file.
@@ -42,6 +42,7 @@ PY
 echo "=== PAICodeConstitution-2026 anchor (auto-injected) ==="
 echo "L0 RATIFIED v1.0: ${ROOT}/PAICodeConstitution-2026.md (14 articles)."
 echo "Routing: declare task classes per governance/routing_policy.yaml; machine facts: governance/machine_config.yaml."
+echo "Reasoning craft (advisory, zero mechanical enforcement — how to reason to satisfy L0): ${ROOT}/governance/OPERATOR_CRAFT.md."
 
 IDX="${ROOT}/_skills/SKILLS_INDEX.md"
 # O_NOFOLLOW + regular-file-only read of the fixed, ROOT-relative skill index, first 40
@@ -66,6 +67,7 @@ PY
 if [ -n "$SKILL_IDX_OUT" ]; then
   echo "--- Skill index (generated; check before building — Art. 7) ---"
   printf '%s\n' "$SKILL_IDX_OUT"
+  echo "Judgment layer beside these facts: ${ROOT}/_skills/CAPABILITY_INVENTORY.md (consumption recipes · shared/local/orphan class · reinvention map — read before building a capability)."
 else
   echo "Skill index not yet generated (plan Phase 4); registry at ${ROOT}/_skills/ — check before building (Art. 7)."
 fi

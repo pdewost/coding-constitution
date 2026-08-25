@@ -1,0 +1,142 @@
+# redaction_map.yaml — every intentional difference between this public repository
+# and the private workspace it is extracted from.
+#
+# WHY THIS FILE EXISTS. This repo is a clean-room extraction of an allowlist, not a
+# mirror. Without a declared map, "the public copy differs from the source" is an
+# argument every time someone notices; with one, it is an assertion a script can make.
+# It was written after a 2026-08-25 measurement found 6 of 8 allowlisted files had
+# drifted unnoticed — the published spec was two ratified revisions behind, one hook
+# differed by 265 lines, and the record described the constitution's own divergence as
+# "scrub-only (attribution + one pointer)" when it was in fact four hunks, two of them
+# substantive wording changes rather than redactions.
+#
+# CONTRACT: a difference not listed here is drift, not redaction, and should be fixed
+# by re-running the extraction — never by editing the public copy in place.
+
+version: 1
+extracted: 2026-08-25
+source: "a private multi-project workspace (not published)"
+method: "clean-room allowlist extraction; see PROTOCOL_publish_regime §1/§5 in the private tree"
+gate: "publish_scan.py — the §4 pre-publish scan, as code; exit 0 required before any push"
+
+redactions:
+  - id: R1
+    pattern: "<absolute workspace path>"
+    replacement: "$WORKSPACE"
+    why: "Absolute paths identify the owner's username and machine layout, and would not
+          work for any adopter. Portable variable instead."
+    occurrences: 0   # none remained in the 2026-08-25 extraction
+
+  - id: R2
+    pattern: "<absolute home path>"
+    replacement: "$HOME"
+    why: "Same reason as R1, one level up."
+    occurrences: 0
+
+  - id: R3
+    pattern: "by <owner name>, "
+    replacement: ""
+    why: "Personal attribution in the constitution's ratification line. The ratification
+          is a fact; the name is personal data and adds nothing for an adopter."
+    occurrences: 1
+    files: ["PAICodeConstitution-2026.md"]
+
+  - id: R4
+    pattern: ", from the <private project> outage"
+    replacement: ""
+    why: "Amendment I's provenance names the private project whose production incident
+          prompted it. The amendment stands on its own text."
+    occurrences: 1
+    files: ["PAICodeConstitution-2026.md"]
+
+  - id: R5
+    pattern: "`governance/AMENDMENT_I_PROPOSAL_2026-06-10.md`"
+    replacement: "`spec/NEOCORTEX_SPEC.md`"
+    why: "The original pointer targets a governance artifact that is not on the publish
+          allowlist. Repointed at the published spec so the reference resolves here."
+    occurrences: 1
+    files: ["PAICodeConstitution-2026.md"]
+
+  - id: R6..R10
+    pattern: "<private project codenames>"
+    replacement: "PROJECT-A … PROJECT-E"
+    why: "Lesson comments in the hooks and skills cite the incidents that produced them.
+          The lessons are the reusable part; the codenames are not."
+    note: "Patterns are case-INSENSITIVE and bounded on letters, not on \\b word boundaries.
+           A \\b-anchored name misses BOTH the underscore-joined form (INCIDENT_<NAME>_<date>,
+           because underscore is itself a word character) AND lowercased occurrences inside
+           identifiers. A §5.5 reviewer found the gate reporting already-published commits
+           clean for exactly that reason. One codename is kept case-SENSITIVE on purpose:
+           its lowercase form is ordinary hardware vocabulary and folding case would make
+           the gate cry wolf on legitimate prose."
+    occurrences: "recount at each extraction; grep the publish set excluding this file"
+
+  - id: R12
+    pattern: "<a reviewer codename> / <a third party's surname>"
+    replacement: "REDACTED-INCIDENT"
+    why: "One was an internal review codename; the other was ruled by the founder to be a
+          PERSON'S NAME — it labelled the 2026-03 incident behind DENY-CONTACT-DELETE, a
+          policy that exists because an AppleScript destroyed a real Contacts entry. A
+          surname attached to a destroyed record is third-party personal data, not a label."
+
+  - id: R13..R15
+    pattern: "governance/adapters/claude-code/ · governance/policy/POLICY_CORE.md · governance/NEOCORTEX_SPEC.md"
+    replacement: "adapters/claude-code/ · spec/POLICY_CORE.md · spec/NEOCORTEX_SPEC.md"
+    why: "LAYOUT, not secrecy. The private tree keeps the kit under governance/; the published
+          repo puts it at the root. These rewrite references to files IN THIS REPO."
+    important: "References to files in the ADOPTER'S OWN workspace — governance/routing_policy.yaml,
+                governance/adapters/INSTALLED.json, governance/hook_heartbeat.log — are deliberately
+                NOT rewritten. Those paths are correct: the adopter creates that directory. Conflating
+                the two left the adapter README pointing at paths that resolved nowhere."
+
+  - id: R11
+    pattern: "<personal contact handle>"
+    replacement: ""
+    why: "Personal contact data."
+    occurrences: 0
+
+# Deliberate, reviewed hits that the §4 gate is configured to allow. Anything not
+# listed in publish_scan.py's EXCEPTIONS fails the gate.
+declared_exceptions:
+  - file: LICENSE
+    pattern: owner-name
+    why: "A copyright notice must name its holder. Scrubbing it protects nothing and
+          would make the licence unenforceable."
+
+# ALREADY-PUBLISHED EXPOSURE — what a scrub of HEAD cannot reach.
+#
+# Editing a file removes it from the working tree, not from the commits already on the
+# remote. `publish_scan.py --full-history` enumerates this; it is recorded here so nobody
+# mistakes a clean tree for a clean repository. Audited 2026-08-25 over 20 commits.
+historical_exposure:
+  - what: "a third party's surname, as INCIDENT_<NAME>_20260309"
+    commits: ["70a1362", "9f08aec"]
+    status: "SCHEDULED FOR REMOVAL by history rewrite (founder ruling 2026-08-25)"
+  - what: "a private project codename"
+    commits: ["9f08aec", "7ad7d53", "02addac"]
+    status: "scrubbed from HEAD; present in published history"
+  - what: "a home-directory path and local database filenames"
+    commits: ["d6e8461"]
+    status: "scrubbed from HEAD; present in published history"
+  - what: "the copyright holder's name in LICENSE and NOTICE"
+    commits: ["99f4a98"]
+    status: "INTENTIONAL — see declared_exceptions"
+
+# Content that exists only here and has no workspace counterpart.
+public_only:
+  - README.md            # written for adopters
+  - LICENSE
+  - DECLARATION.md
+  - ANTIGRAVITY.md       # superseded-2025 stub, kept for lineage
+  - redaction_map.yaml   # this file
+  - publish_scan.py      # the §4 gate
+  - reviews/             # scrubbed review records
+  - adapters/claude-code/bootstrap.sh              # makes the kit runnable in an adopter's workspace
+  - adapters/claude-code/settings.canonical.json   # the hooks block install_adapters.py reads
+
+# Never extracted, under any circumstance.
+firewalled:
+  - "every NEOCORTEX/ (project state) and every _archive/"
+  - "all personal data, contact stores, databases, transcripts and session records"
+  - "the real machine_config.yaml (machine facts, forbidden windows) and the notification config"
+  - "every project-specific CLAUDE.md, and any document naming a private project"

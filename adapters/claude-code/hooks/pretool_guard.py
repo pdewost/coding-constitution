@@ -86,19 +86,19 @@ def _safe_read(root: Path, rel_parts: tuple):
         except OSError:
             pass
 
+
 def _telemetry(event: str) -> None:
     import datetime
     try:
-        _safe_append(ROOT, ("governance", "hook_telemetry.log"),
+        _safe_append(ROOT, ("governance", "pilot_telemetry.log"),
                      f"{datetime.datetime.now().isoformat(timespec='seconds')} {event}\n")
     except OSError:
         pass
 
 
 # Commands considered "heavy extraction/vectorization" for DENY-WINDOW.
-# Adopters: extend this pattern with your own heavy / long-running command names.
 EXTRACTION_RE = re.compile(
-    r"extract|ingest|vectoriz|embed|chromadb|reindex|bulk_",
+    r"unified_extractor|unified_sync|vectoriz|chromadb|bulk_ingest|build_relationship_edges",
     re.IGNORECASE,
 )
 # Deny destruction of archives. Layer 1: rm/rmdir/unlink/shred touching them directly.
@@ -169,9 +169,9 @@ def main() -> None:
     # Shell variable indirection (e.g. OP=person; delete $OP), Unicode homoglyphs, and
     # multi-step command composition are NOT detected. Do not over-rely on this guard.
     if re.search(r"delete\s+(person|people|every\s+person)", cmd, re.IGNORECASE):
-        deny("DENY-CONTACT-DELETE (Art. 4 — irreversible contact-data loss): "
-             "AppleScript 'delete person' is forbidden. Use group-membership "
-             "changes or ask the user to delete manually.")
+        deny("DENY-CONTACT-DELETE (Art. 4 / the 2026-03 contact-deletion incident): AppleScript "
+             "'delete person' is forbidden. Use group-membership changes or ask "
+             "the user to delete manually.")
 
     # DEFENCE-IN-DEPTH, not a complete sandbox: catches the common direct, find/xargs,
     # and quoted-mv forms — a determined shell can still evade (variables, globs, `mv -t`,
@@ -184,7 +184,7 @@ def main() -> None:
     window = forbidden_window()
     if window and EXTRACTION_RE.search(cmd):
         deny(f"DENY-WINDOW (machine_config.yaml): extraction/vectorization is "
-             f"forbidden during {window} (per your machine_config.yaml). Defer or "
+             f"forbidden during {window} (02:40 LaunchAgent collision). Defer or "
              f"ask the user to override manually.")
 
     sys.exit(0)

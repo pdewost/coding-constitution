@@ -2,7 +2,7 @@
 name: verify_gate
 version: 0.2.0
 kind: library
-status: incubating
+status: active
 description: Harness- & coder-neutral VERIFY-GATE — validates an independently-produced, externally-attested verdict (LLM, subagent, or human) and blocks only when independence is anchored OUTSIDE the producing agent; change-set-bound single-use receipts.
 ---
 
@@ -81,7 +81,7 @@ produce_review.py --artifact X --evidence-json E.json --backend stateless_llm \
 
 ## Status / consumers
 
-`incubating` · advisory-mode only. **Gate + producer both built** (the gate validates; the producer
+`active` · advisory-mode only (promoted from incubating 2026-07-05 — its own `--lint` counts 6 real consumers). **Gate + producer both built** (the gate validates; the producer
 runs reviews — harness-subagent primary + stateless-llm fallback). `POLICY_CORE += VERIFY-GATE` is
 landed (live, v1.1). **Wired as the `verify_advisory` Claude Code adapter hook (advisory-mode), deployable via `install_adapters`; blocking is per-project opt-in (`.verify/armed` + a wired reviewer + a proven change-set receipt).**
 Next (founder-gated): per-harness adapters + the advisory fleet push; the change-set receipt in

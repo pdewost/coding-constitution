@@ -274,6 +274,12 @@ def _cold_start_tokens(nc_dir: Path, manifest_data: dict) -> int:
         total_bytes += status_path.stat().st_size
     # Active plans
     for entry in manifest_data.get("files", []):
+        if not isinstance(entry, dict):
+            # Defensive: check() already records "files[i] is not an object" for
+            # this entry — a malformed manifest must not crash the token estimator
+            # before those violations print (2026-07-27 regression: 3 projects'
+            # --check died with AttributeError instead of reporting).
+            continue
         if entry.get("status") == "ACTIVE" and entry.get("genre") == "PLAN":
             fpath = nc_dir / entry.get("file", "")
             if fpath.exists():
@@ -655,6 +661,59 @@ def scaffold_neocortex(project_dir: Path, project_name: str, dry_run: bool = Fal
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
+def init(project_dir: Path) -> int:
+    """Scaffold a NEOCORTEX/ for a project that has none, then regenerate.
+
+    Why this exists. `--regenerate` only rebuilds files[] INSIDE an existing NEOCORTEX/, and
+    NEOCORTEX_SPEC §5 is a migration procedure written around an existing BRAIN/. Between
+    them there was no documented way to originate state for a brand-new project — the single
+    most common case for anyone adopting this kit — and the README told adopters to run
+    --regenerate, which exits 2 with "NEOCORTEX/ directory not found" (§5.5 panel, 2026-08-25).
+
+    Refuses rather than overwrites if NEOCORTEX/ already exists: originating state is not
+    the same operation as rebuilding it, and conflating them risks clobbering real history.
+    """
+    nc = project_dir / "NEOCORTEX"
+    if nc.exists():
+        print(f"NEOCORTEX/ already exists at {nc} — use --regenerate to rebuild files[], "
+              f"or --check to validate it.", file=sys.stderr)
+        return 2
+    name = project_dir.name
+    nc.mkdir(parents=True)
+    (nc / "STATUS.md").write_text(
+        f"# {name} — NEOCORTEX Status\n\n"
+        "<!-- Bounded rebase block (NEOCORTEX_SPEC §2). Overwritten in place every session. "
+        "Keep it under its size bound. -->\n\n"
+        "## SINGLE NEXT ACTION\n\n"
+        "_Replace this with the one thing a cold-start agent should do next, with the exact "
+        "command and the file it touches._\n\n"
+        "## What this project is\n\n_One paragraph. Assume no prior context._\n\n"
+        "## Invariants\n\n_Things that must stay true. State each so a script could check it._\n\n"
+        "## Open work, in priority order\n\n1. _…_\n", encoding="utf-8")
+    (nc / "JOURNAL.md").write_text(
+        f"# JOURNAL — {name}\n\n"
+        "> Append one entry per working session: decisions and their reasons, consents "
+        "recorded BEFORE the operations they authorise. Never delete; rotate to _archive/ "
+        "when it approaches its size bound.\n", encoding="utf-8")
+    (nc / "MANIFEST.json").write_text(
+        json.dumps({"spec": "NEOCORTEX_SPEC", "project": name, "updated": "",
+                    # All four archive sub-fields are required by check(); a scaffold that
+                    # fails the validator shipped alongside it is worse than no scaffold.
+                    "archive": {"exists": False, "span": "",
+                                "contents": "none yet — rotated JOURNALs and superseded "
+                                            "PLAN revisions land here",
+                                "note": "created by --init; no archive exists yet"},
+                    "files": []},
+                   indent=1) + "\n", encoding="utf-8")
+    print(f"scaffolded {nc} (STATUS.md, JOURNAL.md, MANIFEST.json)")
+    rc = regenerate(project_dir)
+    if rc != 0:
+        return rc
+    # Prove the scaffold satisfies the validator that ships with it, here, at creation time
+    # — rather than leaving an adopter to discover it does not.
+    return check(project_dir)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="NEOCORTEX MANIFEST validator and regenerator (NEOCORTEX_SPEC v1.0 §2).",
@@ -672,6 +731,11 @@ def main() -> int:
         metavar="PROJECT_DIR",
         help="Rebuild MANIFEST.json files[] from directory contents",
     )
+    group.add_argument(
+        "--init",
+        metavar="PROJECT_DIR",
+        help="Scaffold a NEOCORTEX/ for a project that has none, then regenerate",
+    )
 
     args = parser.parse_args()
 
@@ -681,6 +745,13 @@ def main() -> int:
             print(f"ERROR: project directory not found: {project_dir}", file=sys.stderr)
             return 2
         return check(project_dir)
+
+    if args.init:
+        project_dir = Path(os.path.expanduser(args.init)).resolve()
+        if not project_dir.is_dir():
+            print(f"ERROR: project directory not found: {project_dir}", file=sys.stderr)
+            return 2
+        return init(project_dir)
 
     if args.regenerate:
         project_dir = Path(os.path.expanduser(args.regenerate)).resolve()
