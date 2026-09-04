@@ -63,8 +63,8 @@ complete and self-tested:
 |---|---|---|
 | **ANCHOR** | session start / resume / compaction | injects cold-start context: Constitution pointer, the project's state manifest + status, a bounded skill index |
 | **GUARDRAIL** | every user prompt | a ≤4-line, task-aware reminder: planning → budgets + "PLAN before code" + *propose an adversarial review*; destructive → dry-run/apply gates; else → one rotated principle (rotation defeats habituation) |
-| **COMPILE-GATE** | after each file edit | syntax-checks the edited file (`py_compile` / `bash -n` / `osacompile`) and **blocks** with the error fed straight back |
-| **CLOSEOUT-GATE** | agent tries to end the turn | **blocks once** if code was edited but no verification ran, or the journal blew its size bound |
+| **COMPILE-GATE** | after each file edit | syntax-checks the edited file (`py_compile` / `bash -n` / `osacompile`) and **blocks** with the error fed straight back — Python / Bash / AppleScript only, no JS/TS syntax check today (see *TypeScript & JavaScript*, below) |
+| **CLOSEOUT-GATE** | agent tries to end the turn | **blocks once** if code was edited but no verification ran, or the journal blew its size bound — sees an edit made through the harness's own file-editing tools OR a Bash command that writes/overwrites a tracked file (heredoc, `sed -i`, `tee`, `cp`/`mv`/`rsync`, `dd of=`); a write form neither of those catches is invisible to it |
 | **VERIFY-GATE** | a code-edited turn completes | checks for an **independently-anchored** verdict — a reviewer that could not see the author's intent (subagent / stateless API / CI / human); **advisory** where un-anchored, blocking once a project is armed; a change-set-bound, single-use receipt (`_skills/verify_gate`) |
 | **DENY-ARCHIVE** | before tool run | denies `rm`/`mv`/`find -delete`/`xargs` etc. that would delete or move an archive *out* |
 | **DENY-CONTACT-DELETE** | before tool run | denies irreversible `delete person` AppleScript (born from a real data-loss incident) |
@@ -85,6 +85,54 @@ agent tries `osascript -e 'delete person 1'`, the hook returns:
 > (variables, `eval`, `mv -t`, base64) can still evade them. The real protection
 > for irreversible actions is that *the human performs them manually.* This is
 > stated in the code, not hidden.
+
+---
+
+## TypeScript & JavaScript
+
+The Claude Code adapter's language coverage is **uneven by design, not by omission** — read
+this before assuming either "fully supported" or "Python-only":
+
+| Policy | `.ts` / `.js` coverage |
+|---|---|
+| **CLOSEOUT-GATE** | Full. `.ts`/`.js` are recognized code files: an edit to one — through the harness's own editing tools, or a Bash write (heredoc/`sed -i`/`tee`/`cp`/`mv`/`rsync`/`dd of=`) — starts the same "was this verified?" window a `.py` edit does, and `npm test` is a recognized verification command that clears it, same as `pytest`. |
+| **COMPILE-GATE** | None. It syntax-checks `.py` / `.sh` / `.applescript` only; a broken `.ts`/`.js` file is not caught at edit time. Per-file TS/JS syntax checking (`tsc --noEmit`, or your own linter) is not wired in — add it yourself if you want an equivalent to COMPILE-GATE's immediate feedback. |
+| **DENY-\*** | Language-agnostic — these match Bash command text, not file type, so they apply the same regardless of what you're editing. |
+
+None of this is a stack requirement: the kit was built and hardened against a Python-and-Bash
+project, and a TypeScript monorepo gets CLOSEOUT-GATE's full duty-tracking with zero
+configuration, but not COMPILE-GATE's per-edit syntax gate. If that gap matters to you, it's a
+small, self-contained addition to `postedit_compile_gate.py` — the same `elif fp.endswith(...)`
+pattern the existing three branches already use.
+
+---
+
+## Governing more than one project (a "fleet")
+
+The adopt sequence above scales from **one project to many without changing shape** — there
+is no separate "fleet mode" to opt into, and no requirement that your workspace root itself be
+a project:
+
+- **A single project.** Run `bootstrap.sh` pointed at that project's own root. Its hooks are
+  live directly there; you're done. `install_adapters.py`'s discovery step deliberately
+  excludes the root it's run against (it looks for *children* to arm), so for a lone project
+  it has nothing to do — skip straight to `verify_fires.py` to confirm the hooks actually fire.
+- **Several projects sharing one policy.** Run `bootstrap.sh` once at a root that *contains*
+  your project directories as children (the root need not be a project itself — this repo's
+  own origin workspace isn't one). `install_adapters.py --root <that-root> --apply` then finds
+  every child directory carrying its own state dir (`NEOCORTEX/`, or the pre-`NEOCORTEX` `BRAIN/`
+  layout) and arms each with a generated `settings.json` pointing at the **one** canonical hook
+  copy `bootstrap.sh` installed — so fixing or extending a hook once (this repo's own CLOSEOUT-
+  GATE widening above was tested exactly this way) updates every armed project the next time
+  each reads its settings, with nothing to keep in sync by hand.
+- **Checking the whole set.** `install_adapters.py --root <root> --check` reports drift (an
+  armed project whose generated settings no longer match the canonical source) and `--apply` is
+  idempotent, so re-running it after a hook change is the normal way to propagate it. `verify_fires.py
+  --root <root>` then reports PROVEN/PENDING per project — this is where the origin workspace's own
+  76-day gap (above) was ultimately visible, once the missing project was actually in scope.
+
+The dividing line is simply: does your root need a project-discovery step, or is the root
+itself the only project? Nothing else about the hooks, permissions, or policies changes.
 
 ---
 
@@ -168,9 +216,15 @@ python3.12 adapters/claude-code/verify_fires.py --root /path/to/your/workspace
 running, and "installed" reads exactly like "working" until you look. In the workspace this
 was extracted from, the *governance* directory itself was excluded from adapter discovery by
 a one-line filter — so the enforcement layer had never once run on the project that defines
-it, and the tooling said nothing for months. `verify_fires.py` distinguishes **PROVEN** (a
-hook demonstrably fired from this path) from **PENDING** (armed, never fired). Until it says
-PROVEN, your enforcement is a plan, not a control.
+it, for 76 days. The gap was visible the moment someone ran step 4's `--check` and read the
+project list: `verify_fires.py` couldn't have shown it (it only reports on projects already
+present in the discovery list `--apply` wrote — a project the list never named is invisible to
+it, not merely PENDING). What `verify_fires.py` gave, once the missing entry was found and
+fixed, was the follow-up number worth knowing: **PROVEN** (a hook demonstrably fired from this
+path) vs. **PENDING** (armed, never fired) — in this case, 0 of 146 Stop-hook firings, because
+it had never been armed at all. Until a project says PROVEN, its enforcement is a plan, not a
+control — and until it's in step 4's own discovery list, `verify_fires.py` can't even tell you
+that much.
 
 Full procedure: `adapters/claude-code/README.md` (policy → mechanism map) and
 `spec/NEOCORTEX_SPEC.md §5` (migration).
@@ -219,7 +273,7 @@ native mechanism. Adding a harness means writing an adapter, never rewriting a p
 PAICodeConstitution-2026.md     # L0 — the centerpiece; read this first
 ANTIGRAVITY.md                  # 2025 predecessor — frozen archive, kept for lineage
 spec/
-  POLICY_CORE.md                # L1 — the eight enforcement policies (harness-neutral)
+  POLICY_CORE.md                # L1 — the nine enforcement policies (harness-neutral)
   NEOCORTEX_SPEC.md             # L3 — the cold-startable project-state model
 adapters/
   claude-code/                  # L1 adapter: hooks/ + installer + validator + self-test

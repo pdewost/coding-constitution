@@ -1,7 +1,8 @@
 # NEOCORTEX_SPEC — Project State Layer (L3)
 
 **Status: v1.2 — RATIFIED 2026-06-10; §7 (published trackers) ratified 2026-07-02; §8
-(agent-dispatched planning output) ratified 2026-08-13** — companion to
+(agent-dispatched planning output) ratified 2026-08-13; §2 (`subtype` field) ratified
+2026-08-28** — companion to
 `PAICodeConstitution-2026.md` Art. 6; binding per its transitional clause.
 This spec itself is **L4 reference data**: amended freely via git
 (Constitution layer table), no Constitutional Review needed. Supersedes the unspecified `BRAIN/` convention (2025)
@@ -60,6 +61,16 @@ in the directory except JOURNAL.md and STATUS.md must appear in `files[]`;
 `genre` must be one of the six in §3. MANIFEST.json is the single sanctioned
 non-markdown file in the NEOCORTEX (exhaustive exemption to the §3 data rule).
 
+**`subtype` (optional, ratified 2026-08-28, `DECISION_drift_disposition_rulings_2026-07-29.md`
+D1's open sub-point).** A file entry MAY carry a free-text `subtype` alongside its required
+`genre`. The six genres (§3) are deliberately narrow and fleet-wide; `subtype` is where a
+project's own local vocabulary that doesn't warrant a seventh genre lives instead of being
+discarded by the rename — e.g. PROJECT-A's `PATENT`/`INVENTORY` findings, folded into the six
+genres by D1, keep that distinction as `{"genre": "NOTE", "subtype": "PATENT"}` rather than
+losing it. Unenforced (no fixed vocabulary, no validator change — an unrecognized extra key
+was already structurally permitted; this makes the specific key sanctioned rather than merely
+tolerated). Absence is not a violation — most projects will never need one.
+
 ```json
 {
   "spec": "NEOCORTEX_SPEC v1.0",
@@ -72,7 +83,8 @@ non-markdown file in the NEOCORTEX (exhaustive exemption to the §3 data rule).
     "note": "frozen verbatim at migration; mine on demand, never delete"
   },
   "files": [
-    {"file": "PLAN_x_2026-06-10.md", "genre": "PLAN", "status": "ACTIVE", "hook": "one-line summary"}
+    {"file": "PLAN_x_2026-06-10.md", "genre": "PLAN", "status": "ACTIVE", "hook": "one-line summary"},
+    {"file": "NOTE_patent_y_2026-06-10.md", "genre": "NOTE", "subtype": "PATENT", "status": "ACTIVE", "hook": "one-line summary"}
   ]
 }
 ```

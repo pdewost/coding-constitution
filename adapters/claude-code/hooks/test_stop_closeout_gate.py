@@ -208,3 +208,158 @@ class TestNonCloseoutPathsAreExempt:
         assert "app.py" in r.stdout, f"wrong file named in the block: {r.stdout!r}"
         assert self.SCRATCH_HTML not in r.stdout, (
             f"exempt path leaked into the block reason: {r.stdout!r}")
+
+class TestVerifyArmed:
+    def test_verify_armed_reads_from_project_not_cwd(self, tmp_path):
+        import sys
+        import pathlib
+        sys.path.insert(0, str(pathlib.Path(__file__).parent))
+        import stop_closeout_gate
+        
+        ws = tmp_path / "ws"
+        proj = ws / "proj"
+        (proj / "NEOCORTEX").mkdir(parents=True)
+        (proj / "CLAUDE.md").touch()
+        
+        verify_dir = proj / ".verify"
+        verify_dir.mkdir()
+        (verify_dir / "armed").touch()
+        
+        edited = [str(proj / "src" / "main.py")]
+        
+        assert stop_closeout_gate._verify_armed(edited) is True
+
+class TestVerifyMarkersM10b:
+    def test_echo_test_bypass_is_blocked(self, tmp_path):
+        import sys
+        import pathlib
+        sys.path.insert(0, str(pathlib.Path(__file__).parent))
+        import stop_closeout_gate
+        
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Edit", {"file_path": "/workspace/example/Project X/src/main.py"}),
+            ("Bash", {"command": "echo test_bypass"}),
+        ])
+        
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        # Should be BLOCKED because "echo test_bypass" does not clear the verification window
+        assert '"decision": "block"' in r.stdout
+        assert "since the last verification command" in r.stdout
+
+    def test_real_verification_command_clears_window(self, tmp_path):
+        import stop_closeout_gate
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Edit", {"file_path": "/workspace/example/Project X/src/main.py"}),
+            ("Bash", {"command": "pytest test_main.py"}),
+        ])
+        
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        # Should PASS because "pytest" is a valid verify marker not stripped
+        assert r.stdout.strip() == ""
+
+
+class TestBashEditDetection:
+    """M-13 (founder ruling 2026-09-04): CLOSEOUT-GATE widened past Edit/Write/NotebookEdit
+    to also see Bash-based edits (heredoc, sed -i, tee, cp/mv/rsync, dd of=) via the same
+    tokenized write-target technique already proven in pretool_guard.py's l0_write_target().
+
+    Fails-before-the-fix proof: test_heredoc_write_without_verification_blocks is exactly
+    the CRUMBLES.md 2026-08-26 scenario (a session editing exclusively through Bash) and
+    would have been silent pre-fix — `edited_code` stayed empty because Bash tool_use
+    blocks were only ever scanned for VERIFY_MARKERS, never for writes.
+    """
+
+    REAL_PY = "/workspace/example/Project X/src/app.py"
+    SCRATCH_PY = "/private/tmp/claude-501/abc123/scratchpad/throwaway.py"
+
+    def test_heredoc_write_without_verification_blocks(self, tmp_path):
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Bash", {"command": f"cat > \"{self.REAL_PY}\" << 'EOF'\nprint('x')\nEOF"}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert '"decision": "block"' in r.stdout, (
+            f"Bash-only edit did not block — the gap this fix closes: {r.stdout!r}")
+        assert "app.py" in r.stdout
+
+    def test_heredoc_write_then_verify_command_clears_window(self, tmp_path):
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Bash", {"command": f"cat > \"{self.REAL_PY}\" << 'EOF'\nprint('x')\nEOF"}),
+            ("Bash", {"command": "python3.12 -m pytest app.py"}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert r.stdout.strip() == "", f"false block after real verification: {r.stdout!r}"
+
+    def test_sed_inplace_edit_without_verification_blocks(self, tmp_path):
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Bash", {"command": f"sed -i '' 's/a/b/' \"{self.REAL_PY}\""}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert '"decision": "block"' in r.stdout, f"sed -i did not block: {r.stdout!r}"
+        assert "app.py" in r.stdout
+        assert "s/a/b/" not in r.stdout, (
+            f"the sed expression itself leaked in as a fake target: {r.stdout!r}")
+
+    def test_scratchpad_bash_write_stays_exempt(self, tmp_path):
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Bash", {"command": f"cat > {self.SCRATCH_PY} << 'EOF'\nx = 1\nEOF"}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert r.stdout.strip() == "", (
+            f"scratchpad Bash write false-blocked: {r.stdout!r}")
+
+    def test_quoted_path_with_spaces_is_detected(self, tmp_path):
+        """The exact motivating case for tokenization over a plain regex (documented in
+        pretool_guard.py's L0 guard): a write target whose path contains spaces must not
+        slip through a naive `>\\s*\\S+` match."""
+        spaced = "/workspace/example/Project X/src/my script.py"
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Bash", {"command": f'cat > "{spaced}" << \'EOF\'\nprint(1)\nEOF'}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert '"decision": "block"' in r.stdout, (
+            f"quoted spaced path was not detected: {r.stdout!r}")
+        assert "my script.py" in r.stdout
+
+    def test_read_only_bash_commands_are_not_flagged(self, tmp_path):
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Bash", {"command": f"cat \"{self.REAL_PY}\""}),
+            ("Bash", {"command": f"grep foo \"{self.REAL_PY}\""}),
+            ("Bash", {"command": f"python3.12 \"{self.REAL_PY}\""}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert r.stdout.strip() == "", f"a read was misdetected as a write: {r.stdout!r}"
+
+    def test_heredoc_body_false_positive_is_the_known_tradeoff(self, tmp_path):
+        """Documents, rather than hides, the stated limitation: this tokenizer has no
+        heredoc-body awareness, so a body containing a literal `;` followed by text that
+        reads like a write statement creates a new (fake) segment. This test pins the
+        CURRENT, accepted behavior — over-inclusion, never under-detection — so a future
+        change to it is noticed rather than silently drifting. If this starts failing
+        because the false positive stopped happening, that is an improvement; update the
+        assertion rather than reintroducing the false positive to make it pass again."""
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Bash", {"command": (
+                "cat > notes.md << 'EOF'\n"
+                f"Some text; sed -i 's/x/y/' \"{self.REAL_PY}\"\n"
+                "EOF")}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert '"decision": "block"' in r.stdout, (
+            "expected the documented over-inclusion false positive; if this now stays "
+            f"silent the limitation is fixed, which is fine — update this test: {r.stdout!r}")

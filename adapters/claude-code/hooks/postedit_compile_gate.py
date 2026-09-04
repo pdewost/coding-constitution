@@ -108,6 +108,16 @@ def main() -> None:
             rc, err = run(["osacompile", "-o", "/dev/null", fp], timeout=20)
             if rc != 0:
                 block(f"osacompile failed for {fp}: {err}")
+
+    # Art. 9 mechanization (M-11): validate dispatch class declarations
+    if (path.name == "routing_policy.yaml" and "governance" in path.parts) or ("_skills" in path.parts and fp.endswith(".md")):
+        py = shutil.which("python3.12") or shutil.which("python3") or ""
+        lint_script = ROOT / "governance" / "scripts" / "lint_dispatch_class.py"
+        if py and lint_script.is_file():
+            rc, err = run([py, str(lint_script)])
+            if rc != 0:
+                block(f"Art. 9 dispatch-class lint failed:\n{err}")
+
     sys.exit(0)
 
 
