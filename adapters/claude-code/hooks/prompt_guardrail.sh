@@ -19,10 +19,17 @@ case "$lower" in *delete*|*remove*|*erase*|*drop\ *|*migrate*|*"rm "*|*apply*|*d
 esac
 
 if [ -z "$out" ]; then
-  case $(( $(date +%M) % 3 )) in
+  # 10# forces base 10. WITHOUT IT THIS HOOK IS DEAD FOR 2 MINUTES OF EVERY HOUR: `date +%M`
+  # returns a zero-padded 08 or 09, bash reads a leading zero as OCTAL, and the arithmetic
+  # aborts with "value too great for base" — the hook exits non-zero and injects NOTHING.
+  # Pre-existing since this file was written; found 2026-08-27 while adding Art. 3, by running
+  # the hook rather than reading it. The idiom was already in test_hooks.sh:73 and simply had
+  # not been applied here. 3.3% of all prompts got no guardrail, silently.
+  case $(( 10#$(date +%M) % 4 )) in
     0) out="[Guardrail] Evidence before done: reformulate as a testable goal first; verification log is part of the deliverable; 3 failed fix-verify cycles => STOP and report (Art. 1, 14)." ;;
     1) out="[Guardrail] Surgical: minimum diff, no phantom dependencies, no speculative abstraction; out-of-scope findings => NOTICED BUT NOT TOUCHING (Art. 2)." ;;
     2) out="[Guardrail] Continuity: before ending — STATUS overwritten within bound, JOURNAL entry, MANIFEST current; dual-audience writing, no implicit references (Art. 6)." ;;
+    3) out="[Guardrail] Ambiguity (Art. 3): incompatible readings => ASK, offering 2-3 concrete options; low ambiguity => proceed and state the assumption VISIBLY. Never guess silently. A contradiction between existing artifacts => STOP and report \`CONTRADICTION:\` citing BOTH sides. Measured 2026-08-27: that prefix has NEVER been emitted in 193 transcripts, while five contradictions were found by hand in a single day." ;;
   esac
 fi
 printf '%s\n' "$out"

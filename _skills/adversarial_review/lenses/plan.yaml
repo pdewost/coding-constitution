@@ -1,5 +1,5 @@
 name: plan
-version: "1.1.0"
+version: "1.2.0"
 description: PLAN strengthening — the NEOCORTEX_SPEC §3 validation gate made executable.
 requires_rendering: false
 
@@ -42,7 +42,45 @@ lenses:
       services): verify each exists in the current environment AND ask what happens
       where it does not — a step whose SOLE mechanism is a harness-specific or
       environment-specific capability, with no named fallback, is a finding (HIGH if
-      that step can silently produce an empty result).
+      that step can silently produce an empty result). Also check ORDER AND
+      CROSS-REFERENCES: are rows/phases in the artifact's own declared execution order
+      (report any out-of-sequence row, duplicate identifier, or gap)? For every
+      reference this artifact makes to another tracked file or section — does the
+      target exist, does the named section exist in it, does it describe the target
+      accurately? A dangling or inaccurate cross-reference is a finding.
+
+  - id: shared_frame
+    prompt: |
+      Identify the artifact's own organising idiom — the rule or format it applies to
+      itself. Then ask what that idiom makes invisible: does it systematically drop a
+      class of obligation because that class doesn't fit the format? Human obligations,
+      communication duties, judgement calls, and authority questions are the usual
+      casualties of a format built for machine-checkable conditions. Settled or
+      founder-ruled items are given — do not re-argue them; DO attack whether the
+      artifact correctly works out their consequences.
+
+  - id: physical_consequence
+    prompt: |
+      If the artifact contains a sequence of steps, walk it as physical events in real
+      time, not as a state machine. Ask what each step LEAVES BEHIND and what the next
+      step then encounters. A sequence can be logically valid and physically
+      self-defeating — e.g. a later step assumes a resource, lock, or piece of state
+      that an earlier step already consumed, removed, or invalidated.
+
+  - id: second_order_consequences
+    prompt: |
+      Where the artifact prescribes a remedy or fix, ask what applying that remedy
+      would itself trigger — other project rules, mandatory follow-on steps, machinery
+      that fires automatically. A fix that violates the very gate it was written to
+      protect is a common, near-invisible defect. Trace at least one level past the
+      artifact's own stated fix before concluding it is clean.
+
+  - id: irreversibility
+    prompt: |
+      Name anything destructive with no stated way back, any safety net removed before
+      the hazard it guards, and any point where no one is named as having the
+      authority to stop. A destructive step with no rollback path and no named
+      authority is a finding regardless of how confident the artifact's own prose is.
 
   - id: deliverables
     prompt: |

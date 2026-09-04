@@ -6,6 +6,10 @@ status: active
 description: Harness- & coder-neutral VERIFY-GATE — validates an independently-produced, externally-attested verdict (LLM, subagent, or human) and blocks only when independence is anchored OUTSIDE the producing agent; change-set-bound single-use receipts.
 ---
 
+DISPATCH-CLASS: adversarial@high
+<!-- Art. 9 (declare task classes, never model names), enforced by
+     governance/scripts/lint_dispatch_class.py. WHY: the primary anchor is a harness-spawned fresh-context reviewer subagent whose verdict can BLOCK. Independence is the mechanism, so the class is `adversarial`, never `mechanical`. -->
+
 # verify_gate
 
 The mechanical form of "Assume Independent Audit" (ANTIGRAVITY §15) — pure Python + shell,

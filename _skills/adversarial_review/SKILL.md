@@ -13,6 +13,10 @@ env: []
 requires: []
 ---
 
+DISPATCH-CLASS: adversarial@high
+<!-- Art. 9 (declare task classes, never model names), enforced by
+     governance/scripts/lint_dispatch_class.py. WHY: step 3 spawns INDEPENDENT reviewer subagents (skeptic / panel / workflow tiers). `adversarial` is routing_policy's review class; high because the reviewer must not be cheaper than the drafter it is attacking. -->
+
 # SKILL: adversarial_review (v1.1.0)
 
 **Purpose** — The single adversarial-review mechanism for every gate that the

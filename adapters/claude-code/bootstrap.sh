@@ -46,12 +46,15 @@ cp "$KIT/hooks/"*.py "$KIT/hooks/"*.sh "$DEST/hooks/"
 cp "$KIT/settings.canonical.json" "$DEST/settings.json"
 chmod +x "$DEST/hooks/"*.sh 2>/dev/null || true
 
-# Two hooks consult instruments that must live AT THE WORKSPACE ROOT, not in the kit:
-# the C3 skill-version-drift gate reads _skills/build_index.py, and the closeout advisory
-# runs governance/scripts/continuity_sweep.py. Publishing those scripts was not enough --
-# a reviewer showed both gates STILL could not find them, because nothing in the documented
-# adopt sequence ever copied them out of the kit. A gate that cannot reach its instrument is
-# not revived, it is relocated (§5.5 re-review, 2026-08-25).
+# Instruments that must live AT THE WORKSPACE ROOT, not in the kit: the C3 skill-version-drift
+# gate reads _skills/build_index.py, the closeout advisory runs governance/scripts/
+# continuity_sweep.py, and the closeout staleness advisory (M-9) runs governance/scripts/
+# closeout_lint.py. Publishing those scripts was not enough -- a reviewer showed the first two
+# gates STILL could not find them, because nothing in the documented adopt sequence ever copied
+# them out of the kit. A gate that cannot reach its instrument is not revived, it is relocated
+# (§5.5 re-review, 2026-08-25). closeout_lint.py joined this list the same way (2026-09-04):
+# without it, the CLOSEOUT-GATE's own staleness advisory fails open with "not found" for every
+# adopter, silently, forever -- the identical shape of gap, caught before it shipped that way.
 REPO="$(cd "$KIT/../.." && pwd)"
 if [[ -f "$REPO/_skills/build_index.py" ]]; then
   mkdir -p "$WORKSPACE/_skills"
@@ -63,6 +66,12 @@ if [[ -f "$REPO/governance/scripts/continuity_sweep.py" ]]; then
   [[ -e "$WORKSPACE/governance/scripts/continuity_sweep.py" ]] || \
     cp "$REPO/governance/scripts/continuity_sweep.py" "$WORKSPACE/governance/scripts/"
   echo "  placed governance/scripts/continuity_sweep.py  (closeout continuity advisory)"
+fi
+if [[ -f "$REPO/governance/scripts/closeout_lint.py" ]]; then
+  mkdir -p "$WORKSPACE/governance/scripts"
+  [[ -e "$WORKSPACE/governance/scripts/closeout_lint.py" ]] || \
+    cp "$REPO/governance/scripts/closeout_lint.py" "$WORKSPACE/governance/scripts/"
+  echo "  placed governance/scripts/closeout_lint.py     (closeout staleness advisory, M-9)"
 fi
 
 echo "Installed the canonical hook set into $DEST"

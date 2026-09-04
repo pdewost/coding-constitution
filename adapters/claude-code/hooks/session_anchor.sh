@@ -9,10 +9,26 @@
 # CLAUDE_PROJECT_DIR, which equals the per-project dir when a session starts
 # inside a project (e.g. PROJECT-A's repo) and would break all governance paths.
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# INTERPRETER — resolved ONCE here; never bare `python3` below. `machine_config.yaml` names this
+# hazard: `python3` is PATH-DEPENDENT and `/usr/bin/python3` is 3.9.6, while governance scripts are
+# provisioned for 3.12. Measured 2026-08-27: all four heredocs below parse under 3.9.6 (4/4), so
+# this was a LATENT trap, not a live break. It still had to close, because every call site below
+# is `2>/dev/null` — the day one of them gains 3.10+ syntax it dies SILENTLY and the cold-start
+# anchor degrades with no error anywhere, which is this workspace's most expensive defect class.
+# THE FALLBACK CHAIN IS THE POINT: naming `python3.12` bare would introduce the very failure mode
+# it removes, because a hook whose interpreter is absent fails through that same silent redirect.
+# First reachable candidate wins; bare `python3` remains the last resort, never the first choice.
+PY_BIN=""
+for _c in python3.12 /usr/local/bin/python3.12 /opt/homebrew/bin/python3.12 python3; do
+  if command -v "$_c" >/dev/null 2>&1; then PY_BIN="$_c"; break; fi
+done
+[ -n "$PY_BIN" ] || PY_BIN=python3
+# Escape hatch for the test harness, which must be able to prove the chain actually degrades.
+[ -n "$ANCHOR_PY_BIN" ] && PY_BIN="$ANCHOR_PY_BIN"
+
 # Heartbeat: append timestamp+PWD via an O_NOFOLLOW open of every path component, so a
-# symlink/hardlink planted at the log path can't redirect or clobber another file.
-# (python3 is already required by this hook — see the OPEN_WORK parse below.) Silent.
-_HB_ROOT="$ROOT" _HB_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)" _HB_PWD="$PWD" python3 - <<'PY' 2>/dev/null || true
+# symlink/hardlink planted at the log path can't redirect or clobber another file. Silent.
+_HB_ROOT="$ROOT" _HB_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)" _HB_PWD="$PWD" "$PY_BIN" - <<'PY' 2>/dev/null || true
 import os, stat
 root = os.environ.get("_HB_ROOT", "")
 # strip CR/LF from the cwd so a newline in $PWD can't forge a second log record
@@ -47,7 +63,7 @@ echo "Reasoning craft (advisory, zero mechanical enforcement — how to reason t
 IDX="${ROOT}/_skills/SKILLS_INDEX.md"
 # O_NOFOLLOW + regular-file-only read of the fixed, ROOT-relative skill index, first 40
 # lines — a symlink planted here must not disclose another file into session context.
-SKILL_IDX_OUT="$(_SI="$IDX" python3 - <<'PY' 2>/dev/null
+SKILL_IDX_OUT="$(_SI="$IDX" "$PY_BIN" - <<'PY' 2>/dev/null
 import os, stat, sys
 try:
     fd = os.open(os.environ["_SI"], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -75,7 +91,7 @@ fi
 OW="${ROOT}/governance/OPEN_WORK.md"
 # O_NOFOLLOW + regular-file-only read of the fixed, ROOT-relative backlog. Path passed
 # via env (never interpolated into the python source); a symlink here is refused.
-OPEN_WORK_OUT="$(_OW="$OW" python3 - <<'PY' 2>/dev/null
+OPEN_WORK_OUT="$(_OW="$OW" "$PY_BIN" - <<'PY' 2>/dev/null
 import os, re, stat, sys
 try:
     fd = os.open(os.environ["_OW"], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -106,7 +122,7 @@ fi
 # interpolated into the python source; output capped): a symlink planted at MANIFEST/STATUS must not
 # disclose another readable file into session context (Codex #3, CWE-59 — parity with the fixed reads above).
 _safe_neocortex_cat() {
-  _NF="$1" python3 - <<'PY' 2>/dev/null
+  _NF="$1" "$PY_BIN" - <<'PY' 2>/dev/null
 import os, stat, sys
 try:
     fd = os.open(os.environ["_NF"], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)

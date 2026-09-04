@@ -263,8 +263,13 @@ def _oversized_files(nc_dir: Path) -> list[str]:
     return result
 
 
-def _cold_start_tokens(nc_dir: Path, manifest_data: dict) -> int:
-    """Estimate cold-start token cost (rough: bytes / 4)."""
+def _cold_start_bytes(nc_dir: Path, manifest_data: dict) -> int:
+    """Sum bytes of MANIFEST.json + STATUS.md + every ACTIVE PLAN — the §4
+    cold-start read order. Split out of _cold_start_tokens() so the byte
+    figure can be reported alongside the /4 estimate (REFLECTION_cold_start_
+    telemetry_2026-08-31.md smallest-next-step #3) without changing that
+    function's existing signature/behaviour (a live test asserts on its
+    return value directly)."""
     total_bytes = 0
     manifest_path = nc_dir / "MANIFEST.json"
     if manifest_path.exists():
@@ -284,7 +289,15 @@ def _cold_start_tokens(nc_dir: Path, manifest_data: dict) -> int:
             fpath = nc_dir / entry.get("file", "")
             if fpath.exists():
                 total_bytes += fpath.stat().st_size
-    return total_bytes // 4
+    return total_bytes
+
+
+def _cold_start_tokens(nc_dir: Path, manifest_data: dict) -> int:
+    """Estimate cold-start token cost (rough: bytes / 4). Measured cold-start
+    telemetry (governance/cold_start_ledger.py) has since shown this ratio can
+    overstate the real ingest cost by ~4x on at least one sample — kept as the
+    zero-dependency estimate until per-vendor calibration lands (same PLAN)."""
+    return _cold_start_bytes(nc_dir, manifest_data) // 4
 
 
 # ── Check ──────────────────────────────────────────────────────────────────────
@@ -406,16 +419,19 @@ def check(project_dir: Path) -> int:
         violations.append("JOURNAL.md is missing from NEOCORTEX/")
 
     # 8. Cold-start cost report (informational)
+    cs_bytes = 0
     cs_tokens = 0
     if manifest_data:
-        cs_tokens = _cold_start_tokens(nc_dir, manifest_data)
+        cs_bytes = _cold_start_bytes(nc_dir, manifest_data)
+        cs_tokens = cs_bytes // 4
 
     # ── Output ─────────────────────────────────────────────────────────────────
     project_name = manifest_data.get("project", str(project_dir.name)) if manifest_data else str(project_dir.name)
     print(f"NEOCORTEX check: {project_name}")
     print(f"  Directory: {nc_dir}")
     if manifest_data:
-        print(f"  Cold-start estimate: ~{cs_tokens:,} tokens")
+        print(f"  Cold-start read order: {cs_bytes:,} bytes (~{cs_tokens:,} tokens est. @ /4 — "
+              f"see governance/cold_start_ledger.jsonl for measured figures)")
 
     if not violations:
         print("  RESULT: PASS — no violations")

@@ -43,6 +43,21 @@ _FAMILIES = [
     "gpt", "gemini", "qwen", "llama", "mistral", "deepseek",
 ]
 
+# Lineage (vendor) grouping — coarser than _FAMILIES. routing_policy.yaml's independence
+# ladder distinguishes cross_instance (different family, SAME lineage — "shares the
+# family's blind spots") from cross_lineage (different lineage — "the only level that
+# defeats correlated blind spots"), and requires cross_lineage, unconditionally, for
+# "the NEOCORTEX_SPEC section 3 adversarial gate". _FAMILIES alone can't tell these
+# apart: it buckets "fable" and "opus" as different families, so an Opus-drafts/
+# Fable-reviews pairing passed the old family_warning check silently, as if it were
+# cross-vendor (2026-08-31 §3-gate challenge round, found independently by two review
+# lenses; routing_policy.yaml's own text is the citation, not a new rule).
+_LINEAGES = {
+    "fable": "claude", "opus": "claude", "sonnet": "claude", "haiku": "claude",
+    "gpt": "openai", "gemini": "google",
+    "qwen": "alibaba", "llama": "meta", "mistral": "mistral", "deepseek": "deepseek",
+}
+
 # The reviewer-report JSON contract (embedded in output as findings_schema)
 _FINDINGS_SCHEMA = {
     "type": "object",
@@ -115,6 +130,13 @@ def _family_of(model: str) -> str | None:
         if fam in m:
             return fam
     return None
+
+
+def _lineage_of(model: str) -> str | None:
+    """Vendor-level grouping — see _LINEAGES. None if the model matches no known family
+    (an unrecognized model name is neither confirmed same-lineage nor cross-lineage)."""
+    fam = _family_of(model)
+    return _LINEAGES.get(fam) if fam else None
 
 
 def _load_pack(pack_name: str, packs_dir: Path) -> dict:
@@ -378,6 +400,31 @@ def assemble(
                 file=sys.stderr,
             )
             provenance["family_warning"] = True
+
+        # Lineage (vendor) check — distinct from family_warning above. A different
+        # family within the SAME lineage (e.g. drafter claude-opus-5, reviewer
+        # claude-fable-5) reaches routing_policy.yaml's `cross_instance` level at
+        # best, never `cross_lineage` — the level that gate unconditionally requires
+        # for the NEOCORTEX_SPEC §3 adversarial gate. Without this check the two
+        # pass silently as if cross-vendor.
+        rev_lineage = _lineage_of(reviewer)
+        draft_lineage = _lineage_of(drafter)
+        if (
+            rev_lineage and draft_lineage and rev_lineage == draft_lineage
+            and rev_family != draft_family
+        ):
+            print(
+                f"WARNING: reviewer '{reviewer}' and drafter '{drafter}' are different "
+                f"models but the SAME lineage ('{rev_lineage}'). This satisfies "
+                f"routing_policy.yaml's `cross_instance` independence level, NOT "
+                f"`cross_lineage` — which is unconditionally required for the "
+                f"NEOCORTEX_SPEC §3 adversarial gate regardless of review tier. Use this "
+                f"pairing only for a `skeptic`-tier pre-filter on reversible, "
+                f"judgment-lite work (review_tier's two-question test), never as a "
+                f"substitute for the §3 gate itself.",
+                file=sys.stderr,
+            )
+            provenance["lineage_warning"] = True
 
     # Record rotation provenance when a real rotation occurred (streak >= 3 gate passed)
     if pack_streak >= 3:
