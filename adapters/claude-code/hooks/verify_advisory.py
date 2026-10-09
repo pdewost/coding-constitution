@@ -15,8 +15,14 @@ Design guarantees (see spec/POLICY_CORE.md VERIFY-GATE):
   - change-set = the files edited this turn (from the transcript), never the whole repo.
   - fail-silent: any error => exit 0.
 """
-from __future__ import annotations
 
+import os as _os0, sys as _sys0
+# B4-10 / B5-01 (reviewer A rounds 4-5): Python puts this script's directory first on sys.path, so a file in .claude/hooks/
+# named like a stdlib module (json.py, __future__.py, ...) would run inside this hook before any check. Drop that
+# entry FIRST: no import may precede this block (not even `from __future__`, which is itself an import).
+if __name__ == "__main__" and _sys0.path and \
+        _os0.path.realpath(_sys0.path[0] or ".") == _os0.path.dirname(_os0.path.realpath(__file__)):
+    del _sys0.path[0]
 import datetime
 import json
 import os

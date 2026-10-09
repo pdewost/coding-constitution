@@ -7,23 +7,35 @@ Reads INSTALLED.json (armed-projects manifest) and hook_heartbeat.log
 each armed project whether a real SessionStart has PROVEN to have fired
 from that directory, or whether it is PENDING (not yet observed).
 
-PROVEN means: at least one heartbeat line whose PWD == the project path.
+PROVEN means: a heartbeat line whose PWD == the project path, at most
+FRESH_DAYS old (by its own UTC timestamp).
+STALE means: the latest matching line is older than FRESH_DAYS — the hooks
+fired once, which proves nothing about today (reviewer A S4-53, 2026-10-05).
 PENDING means: no matching line yet — correct and expected for freshly-armed
 projects that have not yet had a real session opened in them.
 
 Output format (one line per project):
   PROVEN   <project_path>  [<latest fire timestamp>]
+  STALE    <project_path>  [<latest fire timestamp>]
   PENDING  <project_path>
 
-Exit 0 always — PENDING is not a failure, it is the honest state.
+Exit 0 when the manifest was read and lists at least one project (PENDING and
+STALE are reported states, not failures). Exit 2 when INSTALLED.json is
+absent, empty, unparseable or unsafe (symlink, hardlink, FIFO), or the
+heartbeat log is unsafe: then nothing was verified and the run must not look
+like a success. (It used to exit 0 always, so a missing manifest printed
+"Armed projects: 0" and passed.)
 
 Usage:
   python3 verify_fires.py
 """
 
 import json
+import os
 import pathlib
+import stat
 import sys
+from datetime import datetime, timedelta, timezone
 
 SCRIPT_DIR  = pathlib.Path(__file__).resolve().parent
 
@@ -86,6 +98,75 @@ ROOT = _find_root(SCRIPT_DIR, _root_from_argv())
 INSTALLED_JSON  = ROOT / "governance" / "adapters" / "INSTALLED.json"
 HEARTBEAT_LOG   = ROOT / "governance" / "hook_heartbeat.log"
 
+# A heartbeat older than this no longer PROVES the hooks fire (founder ruling 2026-10-05).
+FRESH_DAYS = 14
+# A heartbeat stamped in the FUTURE proves nothing either (clock error, a hand-edited or forged line): accept at most this much
+# clock skew ahead of "now" (S4 F9, 2026-10-08).
+SKEW = timedelta(minutes=5)
+
+
+class UnsafeFile(Exception):
+    pass
+
+
+def _safe_read_text(path: pathlib.Path):
+    """Read <path> without following a symlink in ANY component below ROOT and refusing a
+    non-regular or multiply-linked final file (reviewer A S4-54: a FIFO wedged the verifier and a
+    symlink chose its input). Returns None when the file is absent; raises UnsafeFile."""
+    parts = path.relative_to(ROOT).parts
+    dfd = os.open(str(ROOT), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in parts[:-1]:
+            try:
+                nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dfd)
+            except FileNotFoundError:
+                return None
+            except OSError as e:
+                raise UnsafeFile(f"{path}: unsafe path component {part!r} ({e})")
+            os.close(dfd)
+            dfd = nfd
+        try:
+            fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+        except FileNotFoundError:
+            return None
+        except OSError as e:
+            raise UnsafeFile(f"{path}: refused ({e})")
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+                raise UnsafeFile(f"{path}: not a regular single-link file")
+            chunks = []
+            while True:
+                buf = os.read(fd, 65536)
+                if not buf:
+                    break
+                chunks.append(buf)
+            return b"".join(chunks).decode("utf-8", errors="replace")
+        finally:
+            os.close(fd)
+    finally:
+        os.close(dfd)
+
+
+def _is_fresh(ts: str, now: datetime) -> bool:
+    try:
+        when = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return False   # an unparseable stamp proves nothing
+    age = now - when
+    return -SKEW <= age <= timedelta(days=FRESH_DAYS)
+
+
+def _stale_reason(ts: str, now: datetime) -> str:
+    """Why a heartbeat is not fresh, for the STALE line (S4 re-check N7: a future-dated or unparseable stamp is not 'old')."""
+    try:
+        when = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return "unparseable timestamp"
+    if now - when < -SKEW:
+        return "dated in the future"
+    return f"older than {FRESH_DAYS} days"
+
 
 def _load_heartbeats() -> dict[str, str]:
     """
@@ -94,10 +175,11 @@ def _load_heartbeats() -> dict[str, str]:
     Returns a dict mapping PWD → latest timestamp seen for that PWD.
     """
     seen: dict[str, str] = {}
-    if not HEARTBEAT_LOG.exists():
+    text = _safe_read_text(HEARTBEAT_LOG)
+    if text is None:
         return seen
     try:
-        for raw in HEARTBEAT_LOG.read_text().splitlines():
+        for raw in text.splitlines():
             raw = raw.strip()
             if "\t" not in raw:
                 continue
@@ -110,24 +192,36 @@ def _load_heartbeats() -> dict[str, str]:
     return seen
 
 
-def _load_installed() -> list[dict]:
-    if not INSTALLED_JSON.exists():
-        print(f"WARNING: INSTALLED.json not found at {INSTALLED_JSON}", file=sys.stderr)
+def _load_installed():
+    """The manifest's records, or None when it is absent (the caller exits 2)."""
+    text = _safe_read_text(INSTALLED_JSON)
+    if text is None:
+        print(f"ERROR: INSTALLED.json not found at {INSTALLED_JSON}", file=sys.stderr)
         print("Run: python3 adapters/claude-code/install_adapters.py --apply",
               file=sys.stderr)
-        return []
-    with INSTALLED_JSON.open() as f:
-        return json.load(f)
+        return None
+    return json.loads(text)
 
 
 def main():
-    records   = _load_installed()
-    heartbeat = _load_heartbeats()
+    try:
+        records   = _load_installed()
+        heartbeat = _load_heartbeats()
+    except (UnsafeFile, ValueError) as e:
+        print(f"ERROR: {e} — nothing verified.", file=sys.stderr)
+        sys.exit(2)
+    if not records:
+        if records is not None:
+            print(f"ERROR: INSTALLED.json at {INSTALLED_JSON} lists no project — nothing verified.",
+                  file=sys.stderr)
+        sys.exit(2)
+    now = datetime.now(timezone.utc)
 
     armed    = [r for r in records if r.get("has_adapter")]
     unarmed  = [r for r in records if not r.get("has_adapter")]
 
     proven_count  = 0
+    stale_count   = 0
     pending_count = 0
 
     print(f"Armed projects: {len(armed)}  |  Heartbeat entries: {len(heartbeat)}")
@@ -136,9 +230,12 @@ def main():
     for rec in sorted(armed, key=lambda r: r["project_path"]):
         path = rec["project_path"]
         ts   = heartbeat.get(path)
-        if ts:
+        if ts and _is_fresh(ts, now):
             proven_count += 1
             print(f"  PROVEN   {path}  [{ts}]")
+        elif ts:
+            stale_count += 1
+            print(f"  STALE    {path}  [{ts}]  ({_stale_reason(ts, now)})")
         else:
             pending_count += 1
             print(f"  PENDING  {path}")
@@ -150,13 +247,13 @@ def main():
             print(f"  UNARMED  {rec['project_path']}")
 
     print()
-    print(f"Summary: {proven_count} PROVEN, {pending_count} PENDING"
+    print(f"Summary: {proven_count} PROVEN, {stale_count} STALE, {pending_count} PENDING"
           + (f", {len(unarmed)} UNARMED" if unarmed else ""))
     if pending_count:
         print("PENDING is expected for freshly-armed projects awaiting their"
               " first real session — not a failure.")
 
-    # Always exit 0 — PENDING is the honest pre-session state.
+    # PENDING and STALE are reported states, not failures; the failures exited 2 above.
     sys.exit(0)
 
 

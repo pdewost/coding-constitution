@@ -29,6 +29,13 @@ passed whether or not the fix was present, and a status indicator that showed gr
 things were bad. Every gap the review found was one layer below the constitution — which is the
 Sorting Rule working, not a gap in it.
 
+**Enforcement-layer reviews.** The hooks that enforce the constitution are reviewed on their own, by
+models from other labs than the author's, with every finding reproduced as a failing test before its fix.
+
+| Date | Scope | Outcome |
+|---|---|---|
+| [2026-10-07](reviews/REVIEW_2026-10-07_hooks_batch2.md) | Claude Code adapter, hooks batch 2 (v0.7 to v0.12) | 7 external rounds; every finding reproduced as a failing test before its fix |
+
 **Extraction integrity.** This repository is a clean-room extraction, not a mirror.
 [`redaction_map.yaml`](redaction_map.yaml) declares every intentional difference from the private
 source, and [`publish_scan.py`](publish_scan.py) enforces the pre-publish secrets gate as code —
@@ -64,12 +71,19 @@ complete and self-tested:
 | **ANCHOR** | session start / resume / compaction | injects cold-start context: Constitution pointer, the project's state manifest + status, a bounded skill index |
 | **GUARDRAIL** | every user prompt | a ≤4-line, task-aware reminder: planning → budgets + "PLAN before code" + *propose an adversarial review*; destructive → dry-run/apply gates; else → one rotated principle (rotation defeats habituation) |
 | **COMPILE-GATE** | after each file edit | syntax-checks the edited file (`py_compile` / `bash -n` / `osacompile`) and **blocks** with the error fed straight back — Python / Bash / AppleScript only, no JS/TS syntax check today (see *TypeScript & JavaScript*, below) |
-| **CLOSEOUT-GATE** | agent tries to end the turn | **blocks once** if code was edited but no verification ran, or the journal blew its size bound — sees an edit made through the harness's own file-editing tools OR a Bash command that writes/overwrites a tracked file (heredoc, `sed -i`, `tee`, `cp`/`mv`/`rsync`, `dd of=`); a write form neither of those catches is invisible to it |
+| **CLOSEOUT-GATE** | agent tries to end the turn | **blocks once** if code was edited but no verification ran, or the journal blew its size bound — sees an edit made through the harness's own file-editing tools OR a Bash command that writes/overwrites a tracked file (heredoc, `sed -i`, `tee`, `cp`/`mv`/`rsync`, `dd of=`); a write form neither of those catches is invisible to it; a verification counts only if it is a recognised test run (`verifier_recognizer.py`: piped, backgrounded, echoed or `|| true` runs do not count) |
 | **VERIFY-GATE** | a code-edited turn completes | checks for an **independently-anchored** verdict — a reviewer that could not see the author's intent (subagent / stateless API / CI / human); **advisory** where un-anchored, blocking once a project is armed; a change-set-bound, single-use receipt (`_skills/verify_gate`) |
-| **DENY-ARCHIVE** | before tool run | denies `rm`/`mv`/`find -delete`/`xargs` etc. that would delete or move an archive *out* |
+| **DENY-ARCHIVE** | before tool run | denies `rm`/`mv`/`find -delete`/`xargs` etc. that would delete or move an archive *out*; paths resolved physically (symlinks, `..`, `cd`, `git -C`) |
 | **DENY-CONTACT-DELETE** | before tool run | denies irreversible `delete person` AppleScript (born from a real data-loss incident) |
 | **DENY-WINDOW** | before tool run | denies heavy extraction/vectorization during machine-specific forbidden windows |
 | **PUSH-AUDIT** | after `git push` | feeds back a 6-check repo-hygiene audit |
+
+Two more ship in the Claude Code adapter only (added 2026-10; not yet in `spec/POLICY_CORE.md`):
+
+| Policy | Fires on | Effect |
+|---|---|---|
+| **LOOP-BOUND** | before a test or verification run | after 3 fix-and-retry cycles on the same failure, or 6 failing runs in a turn with no pass, **asks** before the next run (Art. 14 made mechanical); a question, not a refusal |
+| **APPROVED LIST** | session start, and every stop | helper hooks run only as the bytes listed in `governance/hooks_approved.sha256`; any other change to hooks, settings or `governance/*.yaml` is reported as tampering until re-approved |
 
 A denial isn't advice — it's a decision the harness obeys. For example, when the
 agent tries `osascript -e 'delete person 1'`, the hook returns:
@@ -85,6 +99,30 @@ agent tries `osascript -e 'delete person 1'`, the hook returns:
 > (variables, `eval`, `mv -t`, base64) can still evade them. The real protection
 > for irreversible actions is that *the human performs them manually.* This is
 > stated in the code, not hidden.
+>
+> **Two known limits in this release** (the kit is wired exactly as its author's own workspace): the DENY guard is
+> registered for `Bash` and the osascript tool only, so the file-editing tools (Edit, Write, MultiEdit, NotebookEdit) never
+> reach it; the constitution and `ANTIGRAVITY-2025.md` are protected from them by the settings' static `deny` rules instead.
+> And a guard that cannot even start (no usable Python) is, like any failing hook, non-blocking. A fail-closed launcher and
+> the editing-tool routing exist in the author's tree and are being hardened; they are not part of this release.
+
+---
+
+## Upgrading an earlier install
+
+Re-run `adapters/claude-code/bootstrap.sh`. Two reasons:
+
+1. **Three hooks never ran.** Before 2026-10-09 the kit shipped `verify_advisory.py`,
+   `session_record_gate.py` and `skill_index_regen.py` without the executable bit, and the bootstrap
+   only fixed `.sh` files. The bootstrap now makes every hook executable.
+2. **The approved list.** The bootstrap writes `governance/hooks_approved.sha256`. After ANY deliberate
+   change to `.claude/hooks/`, `.claude/settings*.json` or `governance/*.yaml`, re-approve (with the
+   interpreter `bootstrap.sh` checked, Python 3.10 or later):
+
+       python3.12 .claude/hooks/hook_support.py --write-approved
+
+   Without it the stop gate cannot recognise your test runs: a turn that edited code is blocked once at its end
+   ("no verification ran"), and that block cannot be cleared by running tests until you re-approve.
 
 ---
 
@@ -179,6 +217,8 @@ armed.
 ---
 
 ## Adopt it
+
+**Prerequisite: Python 3.10 or later** for the install tools (the kit is tested with 3.12; the hooks themselves also run under macOS's bundled 3.9). `bootstrap.sh` refuses an older interpreter before it installs anything, honours `PYTHON=/path/to/python3`, and prints every next command with the interpreter it checked; the `python3.12` below stands for that interpreter.
 
 ```bash
 # 1. Install the canonical hook set + settings into YOUR workspace root. NOTE: the tools do

@@ -2,7 +2,11 @@
   "permissions": {
     "deny": [
       "Edit(ANTIGRAVITY-2025.md)",
-      "Write(ANTIGRAVITY-2025.md)"
+      "Write(ANTIGRAVITY-2025.md)",
+      "Edit(PAICodeConstitution-2026.md)",
+      "Write(PAICodeConstitution-2026.md)",
+      "Edit(**/PAICodeConstitution-2026.md)",
+      "Write(**/PAICodeConstitution-2026.md)"
     ],
     "ask": [
       "Read(/_session_record/**)",

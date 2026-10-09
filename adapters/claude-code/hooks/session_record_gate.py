@@ -26,6 +26,13 @@ Fail-open on ANY error: a gate that crashes must not block unrelated work. The c
 missed prompt is a read of local data the founder owns; the cost of a wedged session is
 every other task. Exit 0 silently when the path is unrelated.
 """
+import os as _os0, sys as _sys0
+# B4-10 / B5-01 (reviewer A rounds 4-5): Python puts this script's directory first on sys.path, so a file in .claude/hooks/
+# named like a stdlib module (json.py, __future__.py, ...) would run inside this hook before any check. Drop that
+# entry FIRST: no import may precede this block (not even `from __future__`, which is itself an import).
+if __name__ == "__main__" and _sys0.path and \
+        _os0.path.realpath(_sys0.path[0] or ".") == _os0.path.dirname(_os0.path.realpath(__file__)):
+    del _sys0.path[0]
 import json
 import re
 import sys

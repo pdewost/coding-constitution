@@ -75,7 +75,7 @@ check "L0 redirect-overwrite denied" fire   "$(j "cat draft.md > $L0" | "$H/pret
 check "L0 sed -i denied"             fire   "$(j "sed -i '' s/a/b/ $L0" | "$H/pretool_guard.py")"
 check "L0 cp-onto denied"            fire   "$(j "cp draft.md $L0" | "$H/pretool_guard.py")"
 check "L0 rm denied"                 fire   "$(j "rm $L0" | "$H/pretool_guard.py")"
-check "L0 clone-path denied"         fire   "$(j "cat d.md > 'GitHub pdewost repositories/antigravity/$L0'" | "$H/pretool_guard.py")"
+check "L0 clone-path denied"         fire   "$(j "cat d.md > 'GitHub example repositories/antigravity/$L0'" | "$H/pretool_guard.py")"
 check "L0 read allowed"              silent "$(j "cat $L0" | "$H/pretool_guard.py")"
 check "L0 read-into-copy allowed"    silent "$(j "cat $L0 > /tmp/copy.md" | "$H/pretool_guard.py")"
 check "normal rm is silent"       silent "$(j 'rm /tmp/scratch.txt' | "$H/pretool_guard.py")"

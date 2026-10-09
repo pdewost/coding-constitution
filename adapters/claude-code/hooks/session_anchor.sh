@@ -60,6 +60,73 @@ echo "L0 RATIFIED v1.0: ${ROOT}/PAICodeConstitution-2026.md (14 articles)."
 echo "Routing: declare task classes per governance/routing_policy.yaml; machine facts: governance/machine_config.yaml."
 echo "Reasoning craft (advisory, zero mechanical enforcement — how to reason to satisfy L0): ${ROOT}/governance/OPERATOR_CRAFT.md."
 
+# H4c + H0 (PLAN_hooks_outcome_tamper_loopbound_2026-10-05): governor tamper evidence, and the count
+# of hook exceptions swallowed in the last 24 h. Prints NOTHING when the live hooks match the approved
+# list and no hook failed: a healthy governor costs the bounded anchor zero lines.
+GOV_OUT="$(_HS_DIR="${ROOT}/.claude/hooks" "$PY_BIN" - <<'PY' 2>/dev/null
+import sys
+sys.path[:] = [p for p in sys.path if p not in ("", ".")]   # B4-10: no module from the cwd shadows the stdlib
+import hashlib, os, types
+d = os.environ["_HS_DIR"]
+root = os.path.dirname(os.path.dirname(d))
+# B3-10 (reviewer A round 3): the bytes of the comparator are checked WITHOUT importing it, and a comparator that
+# cannot be loaded is reported, never silent. B3-11: it is loaded from source (no cached .pyc runs).
+# B5-02 / B5-30 (reviewer A round 5): only a regular file of bounded size is read (no link, no FIFO, no device), and
+# NO approved entry (list missing or unreadable, or no line for it) means NOT executed, like a mismatch.
+import stat
+own, data = None, None
+try:
+    with open(os.path.join(root, "governance", "hooks_approved.sha256"), encoding="utf-8", errors="replace") as fh:
+        want = next((ln.split(None, 1)[0] for ln in fh if ln.rstrip("\n").endswith("  .claude/hooks/hook_support.py")), None)
+except OSError:
+    want = None
+p = os.path.join(d, "hook_support.py")
+try:
+    st = os.lstat(p)
+    if not stat.S_ISREG(st.st_mode) or st.st_size > 4000000:
+        own = ".claude/hooks/hook_support.py: not a regular file of bounded size"
+    else:
+        fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        try:
+            data = os.read(fd, 4000001)
+        finally:
+            os.close(fd)
+        have = "%s:%o" % (hashlib.sha256(data).hexdigest(), st.st_mode & 0o7777)
+        if want is None:
+            own = ("governance/hooks_approved.sha256 is missing, unreadable or has no line for "
+                   ".claude/hooks/hook_support.py")
+        elif want != have:
+            own = ".claude/hooks/hook_support.py: approved %s, live %s (independent check)" % (want[:12], have[:12])
+except OSError as exc:
+    own = ".claude/hooks/hook_support.py could not be read (%s)" % type(exc).__name__
+if own:
+    # B4-07 (reviewer A round 4): a comparator whose bytes are not the approved ones is reported and NEVER executed
+    print("GOVERNOR MODIFIED (H4c): " + own + " -- GOVERNOR CHECK UNAVAILABLE (H4c): the comparator was not run.")
+    sys.exit(0)
+try:
+    path = os.path.join(d, "hook_support.py")
+    hs = types.ModuleType("hook_support")
+    hs.__file__ = path
+    sys.modules["hook_support"] = hs
+    exec(compile(data, path, "exec", dont_inherit=True), hs.__dict__)   # the bytes checked above
+except BaseException as exc:
+    print("GOVERNOR CHECK UNAVAILABLE (H4c): .claude/hooks/hook_support.py could not be loaded (%s), so the "
+          "governor cannot be compared." % type(exc).__name__ + (" GOVERNOR MODIFIED (H4c): " + own if own else ""))
+    sys.exit(0)
+issues = hs.integrity_report()
+if own and not any("hook_support.py" in i for i in issues):
+    issues.insert(0, own)
+if issues:
+    more = f" (+{len(issues) - 3} more)" if len(issues) > 3 else ""
+    print("GOVERNOR MODIFIED (H4c): " + "; ".join(issues[:3]) + more + " -- re-approve at a founder-"
+          "visible landing (.claude/hooks/hook_support.py --write-approved) or restore the approved files.")
+n = hs.recent_error_count(24)
+if n:
+    print(f"HOOK ERRORS (24 h): {n} swallowed hook exception(s) -- see governance/hook_errors.jsonl.")
+PY
+)"
+[ -n "$GOV_OUT" ] && printf '%s\n' "$GOV_OUT"
+
 IDX="${ROOT}/_skills/SKILLS_INDEX.md"
 # O_NOFOLLOW + regular-file-only read of the fixed, ROOT-relative skill index, first 40
 # lines — a symlink planted here must not disclose another file into session context.
@@ -70,7 +137,7 @@ try:
 except OSError:
     sys.exit(0)
 try:
-    if not stat.S_ISREG(os.fstat(fd).st_mode):
+    if not stat.S_ISREG(os.fstat(fd).st_mode) or os.fstat(fd).st_nlink != 1:   # S4-47: hardlinks refused too
         sys.exit(0)
     for i, ln in enumerate(os.fdopen(fd, encoding="utf-8", errors="replace")):
         if i >= 40:
@@ -98,7 +165,7 @@ try:
 except OSError:
     sys.exit(0)
 try:
-    if not stat.S_ISREG(os.fstat(fd).st_mode):
+    if not stat.S_ISREG(os.fstat(fd).st_mode) or os.fstat(fd).st_nlink != 1:   # S4-47: hardlinks refused too
         sys.exit(0)
     for l in os.fdopen(fd, encoding="utf-8", errors="replace"):
         if not l.startswith('| ') or l.startswith('| Item') or '---|' in l:
@@ -129,7 +196,7 @@ try:
 except OSError:
     sys.exit(0)
 try:
-    if not stat.S_ISREG(os.fstat(fd).st_mode):
+    if not stat.S_ISREG(os.fstat(fd).st_mode) or os.fstat(fd).st_nlink != 1:   # S4-47: hardlinks refused too
         sys.exit(0)
     n = 0
     for ln in os.fdopen(fd, encoding="utf-8", errors="replace"):

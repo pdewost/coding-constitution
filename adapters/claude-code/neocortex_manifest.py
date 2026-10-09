@@ -2,7 +2,8 @@
 """
 neocortex_manifest.py — NEOCORTEX MANIFEST validator and regenerator.
 
-Implements NEOCORTEX_SPEC v1.0 §2 validation and §4 reporting.
+Implements NEOCORTEX_SPEC §2 validation and §4 reporting (spec version auto-detected
+from spec/NEOCORTEX_SPEC.md at import time — see SPEC_VERSION below).
 
 Usage:
     # Validate a project's NEOCORTEX:
@@ -22,6 +23,7 @@ Stdlib only.
 import argparse
 import json
 import os
+import re
 import stat
 import sys
 from datetime import date
@@ -29,7 +31,53 @@ from pathlib import Path
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-SPEC_VERSION = "NEOCORTEX_SPEC v1.0"
+# adapters/claude-code/neocortex_manifest.py → workspace root
+WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# Published repo (coding-constitution): adapters/claude-code/neocortex_manifest.py
+# with the spec shipped at spec/NEOCORTEX_SPEC.md → repo root. In the workspace this
+# resolves to governance/, which has no spec/ directory, so it never matches there.
+PUBLISHED_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _detect_neocortex_spec_version() -> str:
+    """Read the ratified version stamp from the live spec/NEOCORTEX_SPEC.md
+    header instead of hardcoding it — a hardcoded copy is exactly what went stale
+    at "v1.0" here (and in _skills/project_scaffold/scripts/scaffold.py, fixed
+    first) while the spec itself moved to v1.2 via routine amendments. Falls back
+    to a floor value, loudly, if the spec file can't be read or parsed.
+
+    Two layouts: the repository's OWN shipped spec first, then the workspace (2026-09-25 — until then
+    every published bundle fell back, and publish_extract.py's verify_bundle()
+    refuses a bundle whose --init/--check print this WARNING). The repo-local spec wins (S4 F12,
+    2026-10-08): in the published layout WORKSPACE_ROOT is the clone's PARENT, so a neighbouring
+    workspace's spec/NEOCORTEX_SPEC.md must never outrank the spec the clone ships. In the
+    private workspace there is no governance/spec/, so the workspace file is still the one read."""
+    fallback = "NEOCORTEX_SPEC v1.2"
+    candidates = (
+        PUBLISHED_REPO_ROOT / "spec" / "NEOCORTEX_SPEC.md",
+        WORKSPACE_ROOT / "governance" / "NEOCORTEX_SPEC.md",
+    )
+    for spec_path in candidates:
+        try:
+            head = spec_path.read_text(encoding="utf-8")[:2000]
+            break
+        except (OSError, UnicodeDecodeError):  # a non-UTF-8 spec falls back too, not crash at import
+            continue
+    else:
+        print(f"WARNING: could not read {' or '.join(str(p) for p in candidates)} to detect "
+              f"the current NEOCORTEX_SPEC version; falling back to {fallback!r}. Verify "
+              f"this is still current before trusting the output.", file=sys.stderr)
+        return fallback
+    m = re.search(r"Status:\s*v([\d.]+)", head)
+    if not m:
+        print(f"WARNING: could not parse a version stamp out of {spec_path}; "
+              f"falling back to {fallback!r}. Verify this is still current "
+              f"before trusting the output.", file=sys.stderr)
+        return fallback
+    return f"NEOCORTEX_SPEC v{m.group(1)}"
+
+
+SPEC_VERSION = _detect_neocortex_spec_version()
 TODAY = date.today().isoformat()
 
 VALID_GENRES = {"PLAN", "AUDIT", "INCIDENT", "DECISION", "NOTE", "PROTOCOL"}
@@ -615,7 +663,7 @@ def scaffold_neocortex(project_dir: Path, project_name: str, dry_run: bool = Fal
 
 ### {TODAY} | Project created
 
-- Scaffolded with `project_scaffold` skill (NEOCORTEX_SPEC v1.0).
+- Scaffolded with `project_scaffold` skill ({SPEC_VERSION}).
 - PROJECT_BRIEF.md generated; fill in Goal and Tech Stack.
 - NEOCORTEX/ skeleton created: MANIFEST.json, STATUS.md, JOURNAL.md.
 
@@ -712,7 +760,7 @@ def init(project_dir: Path) -> int:
         "recorded BEFORE the operations they authorise. Never delete; rotate to _archive/ "
         "when it approaches its size bound.\n", encoding="utf-8")
     (nc / "MANIFEST.json").write_text(
-        json.dumps({"spec": "NEOCORTEX_SPEC", "project": name, "updated": "",
+        json.dumps({"spec": SPEC_VERSION, "project": name, "updated": "",
                     # All four archive sub-fields are required by check(); a scaffold that
                     # fails the validator shipped alongside it is worse than no scaffold.
                     "archive": {"exists": False, "span": "",
@@ -732,7 +780,7 @@ def init(project_dir: Path) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="NEOCORTEX MANIFEST validator and regenerator (NEOCORTEX_SPEC v1.0 §2).",
+        description=f"NEOCORTEX MANIFEST validator and regenerator ({SPEC_VERSION} §2).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )

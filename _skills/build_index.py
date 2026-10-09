@@ -32,7 +32,10 @@ Usage:
 Implements §4 + §6 of UNIVERSAL_SKILL_SPEC v2.0.
 """
 
+from __future__ import annotations
+
 import argparse
+import functools
 import json
 import os
 import re
@@ -104,7 +107,7 @@ def _version_mismatches_for(fm_version, title_version, meta_version) -> list[str
 # Paths
 # ---------------------------------------------------------------------------
 SKILLS_DIR = Path(__file__).parent          # _skills/
-WORKSPACE_ROOT = SKILLS_DIR.parent          # Developpement/
+WORKSPACE_ROOT = SKILLS_DIR.parent          # workspace/
 INDEX_JSON = SKILLS_DIR / "index.json"
 INDEX_MD = SKILLS_DIR / "SKILLS_INDEX.md"
 
@@ -155,6 +158,15 @@ _GREP_EXCL = [
     "--exclude-dir=_archive", "--exclude-dir=chroma", "--exclude-dir=storage",
     "--exclude-dir=data", "--exclude-dir=__pycache__",
     "--exclude-dir=venv", "--exclude-dir=.venv", "--exclude-dir=site-packages",
+    # Duplicate checkouts, not consumers: every git worktree under a `.claude/worktrees/`
+    # re-counted its repo's consumers (2026-10-06: local_llm 62 of 133, verify_gate 48 of 60),
+    # so counts swung as sessions made and removed worktrees. `_interaction_log/` holds
+    # archived session scratch, not live code.
+    "--exclude-dir=worktrees", "--exclude-dir=_interaction_log",
+    # C6 (2026-10-08): NEOCORTEX folders hold plans, evidence and review staging (hook candidates,
+    # "live_before" snapshots, review-seat code copies, dated one-off tools), never live code:
+    # 28 counted files there on 2026-10-08, e.g. 3 PROJECT-C _prep copies of supervisor.py for calendar_bridge.
+    "--exclude-dir=NEOCORTEX",
 ]
 
 _RE_IMPORT = re.compile(r"(?:from|import)\s+_skills\.([A-Za-z_]\w*)")
@@ -173,13 +185,21 @@ _RE_BARE_IMPORT = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_]\w*)(?=[.\s]|$)")
 
 
 def _grep(pattern: str, includes: list[str]) -> list[str]:
-    """grep -rEn over the workspace. Returns 'path:lineno:content' lines (empty on error)."""
+    """grep -rEn over the workspace. Returns 'path:lineno:content' lines.
+
+    Raises on timeout, a missing grep or a grep error exit (status > 1): returning [] would silently zero a whole signal
+    and the index would be rewritten with it. Raising leaves the previous index in place.
+    """
     cmd = ["grep", "-rEn", *includes, *_GREP_EXCL, "-e", pattern, str(WORKSPACE_ROOT)]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-        return r.stdout.splitlines()
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return []
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        raise RuntimeError(f"consumer grep failed ({pattern!r}): {e}") from e
+    # grep exits 0 on a match, 1 on none; anything else (2: an error such as a bad pattern or an unreadable file) means the
+    # output may be partial, and a partial list would silently undercount consumers (S4 F10, 2026-10-08).
+    if r.returncode not in (0, 1):
+        raise RuntimeError(f"consumer grep failed ({pattern!r}): exit {r.returncode}: {r.stderr.strip()[:200]}")
+    return r.stdout.splitlines()
 
 
 def _parse_grep_line(line: str) -> tuple[str, str] | None:
@@ -190,9 +210,36 @@ def _parse_grep_line(line: str) -> tuple[str, str] | None:
     return parts[0], parts[2]
 
 
+@functools.lru_cache(maxsize=None)
+def _dir_in_linked_worktree(dirpath: str) -> bool:
+    """True when the nearest git checkout enclosing `dirpath` is a LINKED WORKTREE: its `.git` is
+    a FILE whose `gitdir:` points into `<repo>/.git/worktrees/`. C6 (2026-10-08): the C5
+    `--exclude-dir=worktrees` only caught Claude Code's own `.claude/worktrees/`; PROJECT-B's
+    `git worktree add ../example-project` sat beside its repo and doubled
+    calendar_bridge's count (11 of 28). A submodule's `.git` file points into `.git/modules/`
+    instead, and stays counted. The nearest `.git` (dir or file) decides; nothing above
+    WORKSPACE_ROOT is looked at."""
+    d = Path(dirpath)
+    root = Path(WORKSPACE_ROOT)
+    while True:
+        g = d / ".git"
+        if g.is_dir():
+            return False
+        if g.is_file():
+            try:
+                head = g.read_text(encoding="utf-8", errors="replace").strip()
+            except OSError:
+                return False
+            return head.startswith("gitdir:") and "/worktrees/" in head.replace("\\", "/")
+        if d == root or d.parent == d or root not in d.parents:
+            return False
+        d = d.parent
+
+
 def _build_consumer_map(skill_names: set[str],
                         requires_by_skill: dict[str, list[str]]) -> dict[str, set[str]]:
     """Map each skill name → set of distinct consumer file paths (signals 1–4)."""
+    _dir_in_linked_worktree.cache_clear()   # filesystem state can change between builds
     cmap: dict[str, set[str]] = {n: set() for n in skill_names}
 
     def add(name: str, filepath: str) -> None:
@@ -200,6 +247,8 @@ def _build_consumer_map(skill_names: set[str],
             return
         own = f"{SKILLS_DIR}{os.sep}{name}{os.sep}"   # exclude ONLY the skill's own dir
         if filepath.startswith(own):
+            return
+        if _dir_in_linked_worktree(os.path.dirname(filepath)):
             return
         cmap[name].add(filepath)
 
