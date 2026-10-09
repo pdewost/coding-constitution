@@ -421,7 +421,7 @@ def check_series_counts(scope: pathlib.Path) -> list[Finding]:
     18% precision, worse than the 150-false-positive first run this check was supposedly
     calibrated away from. "N rounds" in prose almost never means "the series has N files": the
     nine false ones counted FINDINGS ("Two round-2 audit findings are absorbed"), REVIEWERS
-    ("two of three round-9 reviewers"), other people's PASSES ("Fugu has now reviewed two
+    ("two of three round-9 reviewers"), other people's PASSES ("reviewer A has now reviewed two
     rounds"), and partitive subsets ("the next two rounds", "Four rounds of prose prescription").
     Both true ones were the file's own §3 series summary. So the claim is now checked only where
     it can mean what the check assumes:

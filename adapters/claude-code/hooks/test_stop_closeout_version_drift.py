@@ -63,6 +63,9 @@ def _fixture(tmp_path, skills: dict, with_build_index: bool = True):
     hooks_dir.mkdir(parents=True)
     hook_copy = hooks_dir / "stop_closeout_gate.py"
     shutil.copy(_HOOK_SRC, hook_copy)
+    for _sib in ("verifier_recognizer.py", "hook_support.py"):   # 2026-10-05: the gate's sibling modules
+        if (_HOOK_SRC.parent / _sib).is_file():
+            shutil.copy(_HOOK_SRC.parent / _sib, hook_copy.parent / _sib)
 
     skills_dir = hookroot / "_skills"
     skills_dir.mkdir()

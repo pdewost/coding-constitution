@@ -15,6 +15,7 @@
 
 version: 1
 extracted: 2026-08-25
+re_extracted: 2026-10-08   # publish S4 fixes (R12b changed; R12c, R20-R23, R25, R28 added; R24 by hand)
 source: "a private multi-project workspace (not published)"
 method: "clean-room allowlist extraction; see PROTOCOL_publish_regime §1/§5 in the private tree"
 gate: "publish_scan.py — the §4 pre-publish scan, as code; exit 0 required before any push"
@@ -95,6 +96,78 @@ redactions:
     why: "Personal contact data."
     occurrences: 0
 
+  - id: R16
+    pattern: "<an example macOS home path>"
+    replacement: "/srv/example"
+    why: "Example home paths in tests and comments. Not the HOME variable: an unresolved variable would change
+          what two tests assert. (2026-10-07)"
+
+  - id: R17
+    pattern: "<a private project folder name>"   # the pattern IS the private name, so it is not listed
+    replacement: "Example Projects"
+    why: "A private project folder name in a test fixture. (2026-10-07)"
+
+  - id: R18
+    pattern: "<the private workspace folder name>"   # same reason
+    replacement: "workspace"
+    why: "LAYOUT: the private workspace folder name, in a comment. (2026-10-07)"
+
+  # --- publish S4 (2026-10-08): a confined review of the bundle found leaks the scan's term list did not know.
+  - id: R12b
+    pattern: "<an external reviewer's internal name>, any case"
+    replacement: "reviewer A"
+    why: "Founder ruling 2026-10-08: the reviewer is named neutrally everywhere. Until then only the
+          all-caps form was replaced, with REDACTED-INCIDENT, which left the mixed-case name in
+          hook comments and once broke a shell variable name. (2026-10-08)"
+
+  - id: R12c
+    pattern: "<the same name>_ (inside a record filename)"
+    replacement: "REVIEWER_A"
+    why: "Keeps a quoted filename one word. (2026-10-08)"
+
+  - id: R20
+    pattern: "EXTRA_TARGETS = (<the author's own clone folder>,)"
+    replacement: "EXTRA_TARGETS = ()"
+    why: "BEHAVIOUR, declared: the author's extra install target is his own folder; shipped, it
+          leaked his layout and made --check fail for every adopter. Adopters list their own. (2026-10-08)"
+
+  - id: R21
+    pattern: "<the author's clone folder name>"
+    replacement: "GitHub example repositories"
+    why: "A personal folder name in comments, a test fixture and a policy row. The replacement keeps
+          its spaces: the L0 clone-path test is about a path WITH spaces. (2026-10-08)"
+
+  - id: R22
+    pattern: "<a private project folder name>"
+    replacement: "example-project"
+    why: "A private project folder in stop-gate comments and a test docstring. (2026-10-08)"
+
+  - id: R23
+    pattern: "the canonical kit `adapters/claude-code/**` (as R13 leaves it)"
+    replacement: "the canonical kit (`adapters/claude-code/**` in this repository, installed as
+                  `governance/adapters/claude-code` in a workspace)"
+    why: "Comment accuracy: after R13 the approved-list comment named the repo path while the code
+          checks the workspace path. (2026-10-08)"
+
+  - id: R24
+    pattern: "<a private typeface project name>_PROOF.html · <a private design-folder path>"
+    replacement: "<FONT>_PROOF.html · the typography project's AUDIT_PERSONAS.md"
+    why: "BY HAND, in _skills/adversarial_review/SKILL.md (public_only since 2026-10-08, see below):
+          one line of the published skill named a private typeface project and a private folder. (2026-10-08)"
+
+  # --- publish S4 re-check (2026-10-08)
+  - id: R25
+    pattern: "<a worktree folder that spells out a private project>"
+    replacement: "example-project"
+    why: "A worktree folder name in a build_index.py comment. (2026-10-08)"
+
+  - id: R28
+    pattern: "the guard's comment 'The wiring (P7) adds these tools to this guard's matcher'"
+    replacement: "a comment saying the published settings route Bash and the osascript tool, not the editing tools"
+    why: "Founder ruling 'A: live parity' (2026-10-08): this release wires the guard exactly as the author's live workspace
+          does; the comment is made true for this repository. (R26/R27, written for a rewired kit, were withdrawn
+          before publication.) (2026-10-08)"
+
 # Deliberate, reviewed hits that the §4 gate is configured to allow. Anything not
 # listed in publish_scan.py's EXCEPTIONS fails the gate.
 declared_exceptions:
@@ -131,8 +204,7 @@ public_only:
   - redaction_map.yaml   # this file
   - publish_scan.py      # the §4 gate
   - reviews/             # scrubbed review records
-  - adapters/claude-code/bootstrap.sh              # makes the kit runnable in an adopter's workspace
-  - adapters/claude-code/settings.canonical.json   # the hooks block install_adapters.py reads
+  - _skills/adversarial_review/   # frozen at its published v1.1.0 since 2026-10-08: the private skill documents the review fleet
 
 # Never extracted, under any circumstance.
 firewalled:

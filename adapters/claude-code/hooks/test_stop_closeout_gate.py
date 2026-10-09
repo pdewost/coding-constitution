@@ -36,6 +36,17 @@ OVERSIZE = b"x" * (65 * 1024)          # 65 KB > 64 KB bound
 WITHIN = b"x" * (10 * 1024)            # 10 KB — comfortably within bounds
 
 
+def _approve(root):
+    """B5-30 (reviewer A round 5): hook siblings run only as APPROVED bytes, so a fixture install gets its own approved
+    list, as a landed install does (`hook_support.py --write-approved`)."""
+    import importlib.util
+    (root / "governance").mkdir(exist_ok=True)
+    spec = importlib.util.spec_from_file_location("_fixture_hook_support", root / ".claude" / "hooks" / "hook_support.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    m.write_approved(root)
+
+
 def _fixture(tmp_path: pathlib.Path, journal_bytes: bytes):
     """Build: <tmp>/hookroot/.claude/hooks/<hook copy>   (ROOT = hookroot)
               <tmp>/ws/CLAUDE.md                          (workspace root, NO NEOCORTEX)
@@ -46,6 +57,10 @@ def _fixture(tmp_path: pathlib.Path, journal_bytes: bytes):
     hooks_dir.mkdir(parents=True)
     hook_copy = hooks_dir / "stop_closeout_gate.py"
     shutil.copy(_HOOK_SRC, hook_copy)
+    for _sib in ("verifier_recognizer.py", "hook_support.py"):   # 2026-10-05: the gate's sibling modules
+        if (_HOOK_SRC.parent / _sib).is_file():
+            shutil.copy(_HOOK_SRC.parent / _sib, hook_copy.parent / _sib)
+    _approve(hookroot)
 
     ws = tmp_path / "ws"
     proj = ws / "proj"
@@ -69,6 +84,23 @@ def _write_transcript(transcript: pathlib.Path, tool_uses):
                 {"type": "tool_use", "name": name, "input": inp}]}}) + "\n"
             for name, inp in tool_uses),
         encoding="utf-8")
+
+
+def _write_transcript_with_errors(transcript: pathlib.Path, tool_uses):
+    """Like _write_transcript, but each item is (name, input, is_error) and gets an `id`
+    on its tool_use block plus a paired tool_result message right after it — the shape a
+    real transcript uses to report whether a call actually succeeded. `_write_transcript`
+    itself never sets `id`, so plain tool_use blocks from it can never collide with an
+    error id collected here."""
+    lines = []
+    for i, (name, inp, is_error) in enumerate(tool_uses):
+        tool_id = f"toolu_test_{i}"
+        lines.append(json.dumps({"message": {"content": [
+            {"type": "tool_use", "id": tool_id, "name": name, "input": inp}]}}))
+        lines.append(json.dumps({"message": {"content": [
+            {"type": "tool_result", "tool_use_id": tool_id, "is_error": is_error,
+             "content": "error" if is_error else "ok"}]}}))
+    transcript.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
 
 
 def _run_hook(hook: pathlib.Path, cwd: pathlib.Path, transcript: pathlib.Path,
@@ -209,6 +241,72 @@ class TestNonCloseoutPathsAreExempt:
         assert self.SCRATCH_HTML not in r.stdout, (
             f"exempt path leaked into the block reason: {r.stdout!r}")
 
+
+class TestProjectScratchDirIsExempt:
+    """_is_scratch_path (added 2026-09-09, PROJECT-A live incident).
+
+    Defect: NON_CLOSEOUT_PREFIXES only ever listed FIXED /tmp/-style prefixes. A
+    project's own scratch/ directory (e.g. `<project>/scratch/svg_to_png.html`) sits at
+    a different absolute path per project, so no fixed-prefix entry could ever cover
+    it — the exact rationale NON_CLOSEOUT_PREFIXES itself documents (a scratchpad
+    artifact verified by non-Bash means is structurally unclearable) applied to a path
+    the deny-list did not yet reach, and it re-blocked identically for 4 consecutive
+    turns in the same session.
+
+    Fix under test: any path with a `scratch` path component, anywhere, is exempt —
+    segment-matched (Path(...).parts), not substring-matched, so it must NOT catch an
+    unrelated name that merely contains "scratch" (e.g. "scratchpad-notes").
+    """
+
+    PROJECT_SCRATCH_HTML = "/workspace/example/Project X/scratch/svg_to_png.html"
+    NESTED_SCRATCH_PY = "/workspace/example/Project X/scratch/sub/dir/throwaway.py"
+    LOOKALIKE_NOT_SCRATCH = "/workspace/example/Project X/scratchpad-notes/app.py"
+
+    def test_project_scratch_dir_html_does_not_block(self, tmp_path):
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Write", {"file_path": self.PROJECT_SCRATCH_HTML, "content": "<p>x</p>"}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert r.stdout.strip() == "", (
+            f"project scratch/ artifact false-blocked: {r.stdout!r}")
+
+    def test_nested_path_under_scratch_dir_is_also_exempt(self, tmp_path):
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Write", {"file_path": self.NESTED_SCRATCH_PY, "content": "x = 1"}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert r.stdout.strip() == "", (
+            f"nested scratch/ path false-blocked: {r.stdout!r}")
+
+    def test_scratchpad_lookalike_directory_is_not_exempt(self, tmp_path):
+        """A directory that merely CONTAINS the substring "scratch" (e.g.
+        scratchpad-notes/) must NOT be exempted — only an exact `scratch` component."""
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Write", {"file_path": self.LOOKALIKE_NOT_SCRATCH, "content": "x = 1"}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert '"decision": "block"' in r.stdout, (
+            f"a scratchpad-notes/ lookalike was wrongly exempted: {r.stdout!r}")
+
+    def test_scratch_dir_via_bash_write_is_also_exempt(self, tmp_path):
+        """The exemption must apply through BOTH detection paths — the Edit/Write/
+        NotebookEdit branch (tested above) and the Bash-write-target branch (M-13)."""
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Bash", {"command": f"cat > \"{self.PROJECT_SCRATCH_HTML}\" << 'EOF'\n<p>x</p>\nEOF"}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert r.stdout.strip() == "", (
+            f"scratch/ Bash write false-blocked: {r.stdout!r}")
+
+
 class TestVerifyArmed:
     def test_verify_armed_reads_from_project_not_cwd(self, tmp_path):
         import sys
@@ -343,6 +441,51 @@ class TestBashEditDetection:
         assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
         assert r.stdout.strip() == "", f"a read was misdetected as a write: {r.stdout!r}"
 
+    def test_rm_after_write_clears_the_pending_set(self, tmp_path):
+        """2026-09-09 live incident (PROJECT-A): a Write, then an `rm -f` of the exact same
+        path several turns later, then no verification command anywhere — pre-fix this
+        blocked forever, because `rm` was invisible to write-detection and nothing else
+        removed the path from `edited_since_verify`. Post-fix: `rm` clears it, so the
+        session stays silent with nothing left to verify."""
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Write", {"file_path": self.REAL_PY, "content": "print(1)"}),
+            ("Bash", {"command": f'rm -f "{self.REAL_PY}"'}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert r.stdout.strip() == "", (
+            f"deleted file still blocked turn-end: {r.stdout!r}")
+
+    def test_rm_of_different_file_does_not_clear_an_unrelated_edit(self, tmp_path):
+        """The other direction: `rm` must only clear the EXACT path it removes, never
+        the whole pending set — an unrelated real edit must keep blocking."""
+        other = "/workspace/example/Project X/src/other.py"
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Write", {"file_path": self.REAL_PY, "content": "print(1)"}),
+            ("Bash", {"command": f'rm -f "{other}"'}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert '"decision": "block"' in r.stdout, (
+            f"an unrelated rm wrongly cleared a real pending edit: {r.stdout!r}")
+        assert "app.py" in r.stdout
+
+    def test_bash_write_then_rm_via_bash_also_clears(self, tmp_path):
+        """Both halves of the fix together: the file is created via a Bash heredoc
+        (M-13's own detection path, not the Edit/Write/NotebookEdit branch), then
+        removed via a separate Bash `rm` — must also clear."""
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Bash", {"command": f"cat > \"{self.REAL_PY}\" << 'EOF'\nprint('x')\nEOF"}),
+            ("Bash", {"command": f'rm "{self.REAL_PY}"'}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert r.stdout.strip() == "", (
+            f"Bash-written-then-Bash-removed file still blocked: {r.stdout!r}")
+
     def test_heredoc_body_false_positive_is_the_known_tradeoff(self, tmp_path):
         """Documents, rather than hides, the stated limitation: this tokenizer has no
         heredoc-body awareness, so a body containing a literal `;` followed by text that
@@ -360,6 +503,111 @@ class TestBashEditDetection:
         ])
         r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
         assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        # 2026-10-05 (hooks batch 2, Seat B B-16): writes are now read per segment from the
+        # heredoc-stripped command, so the heredoc BODY no longer creates a fake write. The
+        # limitation this test documented is fixed; per its own instruction, the assertion is updated.
+        assert r.stdout.strip() == "", f"heredoc body was again treated as a write: {r.stdout!r}"
+
+
+class TestErroredToolCallNotCountedAsEdit:
+    """2026-09-14 live incident (example-project): a mistyped Edit call to a path that was
+    missing a directory segment errored with "No changes to make" (identical old_string/
+    new_string, nothing on disk to touch) — no write ever happened, yet the path kept
+    re-appearing in the CLOSEOUT-GATE block message turns later. Root cause: a tool_use
+    block is written the moment a call is MADE, before its result is known; the gate was
+    reading tool_use alone and had no notion of whether the call actually succeeded."""
+
+    REAL_PY = "/workspace/example/Project X/src/app.py"
+
+    def test_errored_edit_is_not_counted(self, tmp_path):
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript_with_errors(transcript, [
+            ("Edit", {"file_path": self.REAL_PY, "old_string": "x", "new_string": "x"}, True),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert r.stdout.strip() == "", (
+            f"an errored (no-op) Edit call was still treated as a real edit: {r.stdout!r}")
+
+    def test_errored_bash_write_is_not_counted(self, tmp_path):
+        """Same fix, Bash-edit-detection path (M-13) — a heredoc write whose Bash call
+        itself errored (e.g. permission denied) must not seed edited_since_verify either."""
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript_with_errors(transcript, [
+            ("Bash", {"command": f"cat > \"{self.REAL_PY}\" << 'EOF'\nprint('x')\nEOF"}, True),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert r.stdout.strip() == "", (
+            f"an errored Bash write was still treated as a real edit: {r.stdout!r}")
+
+    def test_successful_edit_after_errored_one_still_blocks(self, tmp_path):
+        """The fix must not overreach — only the specific errored tool_use id is skipped;
+        a genuinely successful edit right after it must still block as normal."""
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript_with_errors(transcript, [
+            ("Edit", {"file_path": self.REAL_PY, "old_string": "x", "new_string": "x"}, True),
+            ("Edit", {"file_path": self.REAL_PY, "old_string": "a", "new_string": "b"}, False),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
         assert '"decision": "block"' in r.stdout, (
-            "expected the documented over-inclusion false positive; if this now stays "
-            f"silent the limitation is fixed, which is fine — update this test: {r.stdout!r}")
+            f"a genuinely successful edit was wrongly swallowed: {r.stdout!r}")
+        assert "app.py" in r.stdout
+
+
+class TestBrowserVerificationClearsWindow:
+    """2026-09-14 live incident (example-project, a static HTML/CSS/JS page with no pytest/
+    compile step of its own): real edits verified by actually rendering the page in the
+    Browser pane (console errors read, DOM queried via JS, a screenshot taken) kept
+    re-blocking every later turn — nothing in VERIFY_MARKERS is a Browser-pane MCP tool,
+    so the gate could only ever recognize a Bash-invoked test runner as 'verification'."""
+
+    REAL_HTML = "/workspace/example/Project X/index.html"
+
+    def test_console_check_clears_the_window(self, tmp_path):
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Edit", {"file_path": self.REAL_HTML}),
+            ("mcp__Claude_Browser__read_console_messages", {"onlyErrors": True}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert r.stdout.strip() == "", (
+            f"a real browser console check did not clear the window: {r.stdout!r}")
+
+    def test_javascript_eval_clears_the_window(self, tmp_path):
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Edit", {"file_path": self.REAL_HTML}),
+            ("mcp__Claude_Browser__javascript_tool", {"action": "javascript_exec", "text": "1+1"}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert r.stdout.strip() == "", (
+            f"a JS-eval DOM check did not clear the window: {r.stdout!r}")
+
+    def test_screenshot_clears_the_window(self, tmp_path):
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Edit", {"file_path": self.REAL_HTML}),
+            ("mcp__Claude_Browser__computer", {"action": "screenshot"}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert r.stdout.strip() == "", (
+            f"a screenshot check did not clear the window: {r.stdout!r}")
+
+    def test_non_screenshot_computer_action_does_not_clear_the_window(self, tmp_path):
+        """A click or a keystroke is an interaction, not verification — it must NOT
+        clear the window on its own (only a screenshot, or one of the read-only
+        BROWSER_VERIFY_TOOLS, actually inspects anything)."""
+        hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
+        _write_transcript(transcript, [
+            ("Edit", {"file_path": self.REAL_HTML}),
+            ("mcp__Claude_Browser__computer", {"action": "left_click", "coordinate": [1, 2]}),
+        ])
+        r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
+        assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
+        assert '"decision": "block"' in r.stdout, (
+            f"a mere click was wrongly treated as verification: {r.stdout!r}")

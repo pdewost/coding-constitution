@@ -2,7 +2,8 @@
 
 **Status: v1.2 — RATIFIED 2026-06-10; §7 (published trackers) ratified 2026-07-02; §8
 (agent-dispatched planning output) ratified 2026-08-13; §2 (`subtype` field) ratified
-2026-08-28** — companion to
+2026-08-28; §2 (`status_state` field, format only) ratified 2026-09-11; §2 (JOURNAL archive
+file name: date range) ratified 2026-09-25** — companion to
 `PAICodeConstitution-2026.md` Art. 6; binding per its transitional clause.
 This spec itself is **L4 reference data**: amended freely via git
 (Constitution layer table), no Constitutional Review needed. Supersedes the unspecified `BRAIN/` convention (2025)
@@ -71,9 +72,28 @@ losing it. Unenforced (no fixed vocabulary, no validator change — an unrecogni
 was already structurally permitted; this makes the specific key sanctioned rather than merely
 tolerated). Absence is not a violation — most projects will never need one.
 
+**`status_state` (optional, ratified 2026-09-11, `PLAN_neocortex_health_observables_2026-08-25.md`
+§2/§2.1, propagated via `SURVEY_lowpriority_backlog_wwhw_2026-09-11.md` item 21, option A —
+**format only**).** A file entry MAY carry a machine-readable `status_state` alongside its
+human-prose `status`. Four values, fixed vocabulary — **do not widen it**: `active` ·
+`shipped` · `superseded` · `resolved`. **Absent ⇒ `active`** (fail-safe default; the reverse
+default caused a real archive-then-restore incident on the originating project). **THE FORCING
+RULE, the reason this exists**: *any open residual, carry-forward, or live pointer forces
+`status_state: active`, regardless of what the prose `status` string says.* A row whose prose
+reads "RESOLVED — one small item remains" or "SHIPPED, but see the residual below" is `active`,
+full stop — `shipped`/`resolved` under a live residual is a forced lie a validator or agent then
+acts on, which is exactly the failure this field exists to prevent. Same posture as `subtype`:
+**this ratifies the FORMAT only.** The originating project's own threshold/warning logic (byte
+counts, staleness windows, archivability rules built on top of these four values) is NOT part of
+this ratification and stays project-local — a project adopting `status_state` derives its own
+thresholds the way `PROPOSAL_manifest_claudemd_compression_2026-09-01.md`-style derivations do,
+never imports another project's numbers. Unenforced fleet-wide (no validator change here); a
+project MAY build its own local tooling against it, as PROJECT-A's `scripts/neocortex_health.py`
+already does. Absence is not a violation — most projects will never need one.
+
 ```json
 {
-  "spec": "NEOCORTEX_SPEC v1.0",
+  "spec": "NEOCORTEX_SPEC vX.Y",
   "project": "<name>",
   "updated": "YYYY-MM-DD",
   "archive": {
@@ -84,7 +104,8 @@ tolerated). Absence is not a violation — most projects will never need one.
   },
   "files": [
     {"file": "PLAN_x_2026-06-10.md", "genre": "PLAN", "status": "ACTIVE", "hook": "one-line summary"},
-    {"file": "NOTE_patent_y_2026-06-10.md", "genre": "NOTE", "subtype": "PATENT", "status": "ACTIVE", "hook": "one-line summary"}
+    {"file": "NOTE_patent_y_2026-06-10.md", "genre": "NOTE", "subtype": "PATENT", "status": "ACTIVE", "hook": "one-line summary"},
+    {"file": "PLAN_z_2026-05-01.md", "genre": "PLAN", "status": "SHIPPED v0.42.0 — one residual open, see notes", "status_state": "active", "hook": "the forcing rule in action: prose says shipped, status_state stays active because a residual is still open"}
   ]
 }
 ```
@@ -110,10 +131,15 @@ tolerated). Absence is not a violation — most projects will never need one.
   version-tag convention (`# vX.Y FIX:` comments) is retired; existing tags
   are grandfathered, never extended.
 - **Rotation rule: at each quarter boundary, or upon exceeding 64 KB,**
-  whichever comes first → move to `_archive/JOURNAL_<YYYY>Q<n>.md` and leave a
+  whichever comes first → move to `_archive/JOURNAL_<first-date>_to_<last-date>.md`
+  (the dates of the volume's oldest and newest entries, `YYYY-MM-DD`) and leave a
   ≤10-line digest at the top of the fresh JOURNAL. The size trigger is
   checked by the session-close hook (Phase 3); any agent may perform the
-  rotation.
+  rotation. Why date ranges (founder ruling 2026-09-25): the 64 KB trigger fires
+  several times a quarter, so a quarter name is not unique: the fleet's 47
+  quarter-named volumes (9 projects) needed ad-hoc suffixes, PROJECT-B up to
+  `JOURNAL_2026Q3_rotM`. Volumes already archived under a quarter name keep it;
+  never rename an archived file.
 
 ## 3. Document genres — exactly six
 

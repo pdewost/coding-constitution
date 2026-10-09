@@ -2,8 +2,9 @@
 """
 install_adapters.py — L1 distribution installer (PAICodeConstitution-2026).
 
-Derives the canonical hooks block from the workspace-root .claude/settings.json
-(the single policy source), then writes / checks <project>/.claude/settings.json
+Derives the canonical hooks block — and the restrictive half (deny, ask) of the canonical
+permissions block — from the workspace-root .claude/settings.json (the single policy
+source), then writes / checks <project>/.claude/settings.json
 for every MIGRATED project (a dir containing NEOCORTEX/ within maxdepth 3 of
 the workspace root). Enforcement follows migration: unmigrated BRAIN-only
 projects are NOT armed until they migrate (NEOCORTEX_SPEC §5).
@@ -111,6 +112,14 @@ GENERATED_COMMENT = (
 )
 
 MAX_DEPTH = 3
+
+# EXTRA TARGETS — folders that are NOT migrated projects (no NEOCORTEX/) but where sessions are
+# rooted anyway, so the L1 layer must reach them too. Founder ruling Q6b, 2026-10-05: the public
+# clone held a copy of L0 and hosted a session all day with no hooks and no L0 deny (its only
+# settings file was a settings.local.json with an allow list). Each target is REFUSED unless git
+# itself reports its .claude/settings.json as ignored, because a published adapter would leak the
+# workspace's absolute paths into a public repository whose history is permanent.
+EXTRA_TARGETS = ()   # the published kit ships none: an adopter lists extra repositories here
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -295,6 +304,63 @@ def _load_canonical() -> dict:
     return data["hooks"]
 
 
+# Only the RESTRICTIVE lists travel to the adapters: an `allow` written for the workspace
+# root must never widen what a project session may do without asking.
+PROPAGATED_PERMISSION_KEYS = ("deny", "ask")
+
+
+def _load_canonical_permissions() -> dict:
+    """Return the canonical permissions block (deny/ask only); {} when the root has none.
+
+    WHY (founder ruling Q2b, 2026-10-05; CRUMBLES 'L0 WRITE-GUARD SCOPE GAP', 2026-09-02):
+    Claude Code reads the shared .claude/settings.json only from the session's primary
+    working directory, so the root's L0 deny rules reached root-rooted sessions only; the
+    adapters carried hooks and NO permissions, and an Edit/Write tool call on
+    PAICodeConstitution-2026.md from any project-rooted session was denied by nothing."""
+    with CANONICAL_SETTINGS.open() as f:
+        perms = json.load(f).get("permissions") or {}
+    return {k: list(perms[k]) for k in PROPAGATED_PERMISSION_KEYS if perms.get(k)}
+
+
+def _absolutize_rule(rule: str) -> str:
+    """Rewrite one `Tool(path)` rule so it names the same files from ANY working directory.
+
+    Claude Code resolves `/x` against the settings file's own directory and a bare `x` /
+    `./x` / `**/x` against the session cwd — both mean the workspace root when written in the
+    root file, and something else (or nothing) inside a project adapter. `//abs` and `~/x`
+    are already cwd-independent (the `//` form is the one the P3 canary proved, see
+    mimo/test_mimo_seat.py). A rule with no path (a bare tool name) is refused: copied into
+    every project it would gate that whole tool fleet-wide, which is never what a
+    root-scoped file rule meant."""
+    if not (rule.endswith(")") and "(" in rule):
+        raise ValueError(f"permission rule has no path, not propagated: {rule!r}")
+    tool, spec = rule[:-1].split("(", 1)
+    if spec.startswith("//") or spec.startswith("~/"):
+        return rule
+    root = str(ROOT).strip("/")
+    if spec.startswith("/"):
+        return f"{tool}(//{root}{spec})"
+    if spec.startswith("./"):
+        spec = spec[2:]
+    return f"{tool}(//{root}/{spec})"
+
+
+def _permissions_with_absolute_paths(perms: dict) -> dict:
+    return {k: [_absolutize_rule(r) for r in rules] for k, rules in perms.items()}
+
+
+def _lint_permissions(perms: dict) -> list:
+    """Every propagated rule must be cwd-independent (`//` or `~/`) — the observable the
+    S4/CRUMBLES gap violated. A drift check cannot see a wrong-but-consistent rule."""
+    problems = []
+    for key, rules in perms.items():
+        for rule in rules:
+            spec = rule[:-1].split("(", 1)[1] if rule.endswith(")") and "(" in rule else ""
+            if not (spec.startswith("//") or spec.startswith("~/")):
+                problems.append(f"permissions.{key}: rule is not cwd-independent: {rule!r}")
+    return problems
+
+
 def _hooks_with_absolute_paths(hooks_block: dict) -> dict:
     """
     Return a deep-copy of the hooks block with all command strings resolved to
@@ -303,15 +369,21 @@ def _hooks_with_absolute_paths(hooks_block: dict) -> dict:
     The canonical source uses "$CLAUDE_PROJECT_DIR"/.claude/hooks/... — we
     replace the variable prefix with the absolute path to HOOKS_DIR.
     """
-    import copy, re
+    import copy, re, shlex
     block = copy.deepcopy(hooks_block)
 
     def fix_cmd(cmd: str) -> str:
-        # Matches both quoted and unquoted $CLAUDE_PROJECT_DIR prefix variants
+        # Matches quoted/unquoted and braced/unbraced $CLAUDE_PROJECT_DIR prefix variants
+        # (the braced form shipped unrewritten until 2026-10-03, reviewer A S4-04).
         # plus any relative ./.claude/hooks/ reference.
+        # The replacement must be SHELL-SAFE: the canonical form's quotes are consumed by the match, so a bare path
+        # containing a space would split into two words and the hook would not run (S4 F4, 2026-10-08).
+        # shlex.quote leaves a plain path untouched (byte-identical output) and quotes one with spaces.
+        # A lambda, not a string: re.sub would otherwise interpret backslashes in the replacement.
+        hooks_prefix = shlex.quote(str(HOOKS_DIR)) + "/"
         cmd = re.sub(
-            r'"?\$CLAUDE_PROJECT_DIR"?/\.claude/hooks/',
-            str(HOOKS_DIR) + "/",
+            r'"?\$\{?CLAUDE_PROJECT_DIR\}?"?/\.claude/hooks/',
+            lambda _m: hooks_prefix,
             cmd,
         )
         # Already absolute (hand-copied adapters) — keep as-is
@@ -325,13 +397,58 @@ def _hooks_with_absolute_paths(hooks_block: dict) -> dict:
     return block
 
 
-def _build_adapter_content(hooks_block: dict) -> str:
+def _lint_hook_commands(hooks_block: dict) -> list:
+    """Return a list of problems with the (already rewritten) hook commands: an unresolved
+    CLAUDE_PROJECT_DIR, or a program path that does not exist / is not executable. A drift
+    check cannot see these (it compares generated text with generated text); this can."""
+    import os, re, shlex
+    problems = []
+    for event, entries in hooks_block.items():
+        for entry in entries:
+            for hook in entry.get("hooks", []):
+                cmd = hook.get("command")
+                if not cmd:
+                    continue
+                if "CLAUDE_PROJECT_DIR" in cmd:
+                    problems.append(f"{event}: unresolved CLAUDE_PROJECT_DIR in {cmd!r}")
+                    continue
+                try:
+                    prog = shlex.split(cmd)[0]
+                except (ValueError, IndexError):
+                    problems.append(f"{event}: unparseable command {cmd!r}")
+                    continue
+                if not os.path.isabs(prog):
+                    continue  # a bare name resolved through PATH: not lintable here
+                if not os.path.exists(prog):
+                    problems.append(f"{event}: program not found: {prog}")
+                elif not os.access(prog, os.X_OK):
+                    problems.append(f"{event}: program not executable: {prog}")
+    return problems
+
+
+def _build_adapter_content(hooks_block: dict, permissions: dict | None = None) -> str:
     """Return the JSON string for a project adapter settings.json."""
     payload = {
         "_generated_by": GENERATED_COMMENT,
         "hooks": hooks_block,
     }
+    if permissions:
+        payload["permissions"] = permissions
     return json.dumps(payload, indent=2) + "\n"
+
+
+def _desired():
+    """(desired adapter text, policy hash, absolute hooks, absolute permissions)."""
+    canonical_hooks = _load_canonical()
+    canonical_perms = _load_canonical_permissions()
+    try:
+        abs_perms = _permissions_with_absolute_paths(canonical_perms)
+    except ValueError as e:
+        sys.exit(f"ERROR: {e}")
+    abs_hooks = _hooks_with_absolute_paths(canonical_hooks)
+    policy_hash = _sha256(json.dumps({"hooks": canonical_hooks, "permissions": canonical_perms},
+                                     sort_keys=True))
+    return _build_adapter_content(abs_hooks, abs_perms), policy_hash, abs_hooks, abs_perms
 
 
 def _discover_projects() -> list[pathlib.Path]:
@@ -375,17 +492,46 @@ def _discover_projects() -> list[pathlib.Path]:
     return sorted(found)
 
 
+def _extra_target_status(rel: str) -> tuple[pathlib.Path, str | None]:
+    """(path, refusal reason or None) for one EXTRA_TARGETS entry."""
+    import subprocess
+    path = ROOT / rel
+    if not path.is_dir():
+        return path, "not a directory"
+    try:
+        r = subprocess.run(["git", "-C", str(path), "check-ignore", "-q", ".claude/settings.json"],
+                           capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return path, f"git check-ignore could not run ({e})"
+    if r.returncode != 0:
+        return path, ".claude/settings.json is NOT git-ignored there (refusing: it could be published)"
+    return path, None
+
+
+def _targets() -> tuple[list[pathlib.Path], list[tuple[str, str]]]:
+    """(armed targets = migrated projects + accepted extras, refused extras as (rel, reason))."""
+    projects = _discover_projects()
+    refused = []
+    for rel in EXTRA_TARGETS:
+        path, reason = _extra_target_status(rel)
+        if reason:
+            refused.append((rel, reason))
+        elif path not in projects:
+            projects.append(path)
+    return sorted(projects), refused
+
+
+# The arming manifest goes through the SAME symlink/hardlink/FIFO-safe helpers as every adapter
+# (reviewer A S4-54, founder ruling 2026-10-05): a plain open() followed a symlink planted at
+# INSTALLED.json, truncated through a hardlink, and could block on a FIFO.
 def _read_installed() -> list[dict]:
-    if INSTALLED_JSON.exists():
-        with INSTALLED_JSON.open() as f:
-            return json.load(f)
-    return []
+    text = _safe_confined_read(ROOT, INSTALLED_JSON.parent, INSTALLED_JSON.name)
+    return json.loads(text) if text is not None else []
 
 
 def _write_installed(records: list[dict]):
-    INSTALLED_JSON.parent.mkdir(parents=True, exist_ok=True)
-    with INSTALLED_JSON.open("w") as f:
-        f.write(json.dumps(records, indent=2) + "\n")
+    _safe_confined_write(ROOT, INSTALLED_JSON.parent, INSTALLED_JSON.name,
+                         (json.dumps(records, indent=2) + "\n").encode("utf-8"))
 
 
 def _now_iso() -> str:
@@ -406,13 +552,12 @@ def _make_record(project: pathlib.Path, has_adapter: bool,
 # ── Mode implementations ──────────────────────────────────────────────────────
 
 def _mode_dry_run_or_apply(apply: bool) -> int:
-    canonical_hooks = _load_canonical()
-    abs_hooks = _hooks_with_absolute_paths(canonical_hooks)
-    desired_content = _build_adapter_content(abs_hooks)
-    policy_hash = _sha256(json.dumps(canonical_hooks, sort_keys=True))
+    desired_content, policy_hash, _, _ = _desired()
 
-    projects = _discover_projects()
-    print(f"Discovered {len(projects)} project(s) with state dirs.\n")
+    projects, refused = _targets()
+    print(f"Discovered {len(projects)} target(s) (projects with state dirs + extra targets).\n")
+    for rel, reason in refused:
+        print(f"  REFUSED (extra target)  {rel} — {reason}")
 
     records: list[dict] = []
     changed = 0
@@ -516,15 +661,22 @@ def _mode_dry_run_or_apply(apply: bool) -> int:
 
 def _mode_check() -> int:
     """Drift-check: compare each installed adapter to the canonical source."""
-    canonical_hooks = _load_canonical()
-    abs_hooks = _hooks_with_absolute_paths(canonical_hooks)
-    desired_content = _build_adapter_content(abs_hooks)
-    policy_hash = _sha256(json.dumps(canonical_hooks, sort_keys=True))
+    desired_content, policy_hash, abs_hooks, abs_perms = _desired()
 
-    projects = _discover_projects()
+    lint_problems = _lint_hook_commands(abs_hooks) + _lint_permissions(abs_perms)
+    for prob in lint_problems:
+        print(f"  LINT   {prob}")
+
+    projects, refused = _targets()
+    for rel, reason in refused:
+        lint_problems.append(f"extra target refused: {rel} — {reason}")
     drifted: list[str] = []
     missing: list[str] = []
     clean:   list[str] = []
+    # A project the check could not read safely was NOT checked: it counts against the result
+    # (reviewer A S4-49, founder ruling 2026-10-05). It used to be skipped silently, so a run in which
+    # every project was skipped printed "CHECK PASSED: all 0 armed projects clean" and exited 0.
+    skipped: list[str] = []
 
     for proj in projects:
         adapter_path = proj / ".claude" / "settings.json"
@@ -537,6 +689,7 @@ def _mode_check() -> int:
         if dot_claude.is_symlink() or adapter_path.is_symlink():
             print(f"  SKIP (symlink)  {rel} — "
                   f".claude/ or settings.json is a symlink; skipping check.")
+            skipped.append(rel)
             continue
         # Confinement check — unconditional (catches broken-symlink escapes too).
         try:
@@ -544,6 +697,7 @@ def _mode_check() -> int:
         except ValueError:
             print(f"  SKIP (escape)  {rel} — "
                   f"adapter_path resolves outside project dir; skipping check.")
+            skipped.append(rel)
             continue
 
         # Symlink-safe read (mirror of apply): refuse a raced symlink swap.
@@ -552,6 +706,7 @@ def _mode_check() -> int:
         except OSError:
             print(f"  SKIP (symlink)  {rel} — "
                   f"symlink/unsafe component in path on read; skipping check.")
+            skipped.append(rel)
             continue
         if existing is None:
             missing.append(rel)
@@ -575,8 +730,12 @@ def _mode_check() -> int:
         for r in drifted:
             print(f"  DRIFTED  {r}")
 
-    if missing or drifted:
-        print(f"\nCHECK FAILED: {len(missing)} missing, {len(drifted)} drifted.")
+    accounted = len(clean) + len(missing) + len(drifted) + len(skipped)
+    if missing or drifted or lint_problems or skipped or accounted != len(projects):
+        print(f"\nCHECK FAILED: {len(missing)} missing, {len(drifted)} drifted, "
+              f"{len(skipped)} skipped (not checked), {len(lint_problems)} lint problem(s)"
+              + ("" if accounted == len(projects)
+                 else f"; {len(projects) - accounted} project(s) unaccounted for") + ".")
         return 1
 
     print(f"\nCHECK PASSED: all {len(clean)} armed projects clean (0 drift).")
