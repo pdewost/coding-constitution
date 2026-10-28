@@ -15,7 +15,7 @@
 
 version: 1
 extracted: 2026-08-25
-re_extracted: 2026-10-08   # publish S4 fixes (R12b changed; R12c, R20-R23, R25, R28 added; R24 by hand)
+re_extracted: 2026-10-29   # v0.13 r6: R45, R45b added (r5: R44; r4, 2026-10-28: R5 changed; R29-R43b added; 14 files added to the allowlist)
 source: "a private multi-project workspace (not published)"
 method: "clean-room allowlist extraction; see PROTOCOL_publish_regime §1/§5 in the private tree"
 gate: "publish_scan.py — the §4 pre-publish scan, as code; exit 0 required before any push"
@@ -51,10 +51,12 @@ redactions:
     files: ["PAICodeConstitution-2026.md"]
 
   - id: R5
-    pattern: "`governance/AMENDMENT_I_PROPOSAL_2026-06-10.md`"
-    replacement: "`spec/NEOCORTEX_SPEC.md`"
+    pattern: "enforcement spec: `governance/AMENDMENT_I_PROPOSAL_2026-06-10.md` §L1"
+    replacement: "L1 reminder: the destructive-operation guardrail in `adapters/claude-code/hooks/prompt_guardrail.sh`"
     why: "The original pointer targets a governance artifact that is not on the publish
-          allowlist. Repointed at the published spec so the reference resolves here."
+          allowlist. Until 2026-10-27 it was repointed at spec/NEOCORTEX_SPEC.md, which has no
+          Amendment I section, so the pointer (and its '§L1') dangled. It now names what ships:
+          the reminder the guardrail hook injects on destructive prompts. (2026-10-27)"
     occurrences: 1
     files: ["PAICodeConstitution-2026.md"]
 
@@ -168,31 +170,189 @@ redactions:
           does; the comment is made true for this repository. (R26/R27, written for a rewired kit, were withdrawn
           before publication.) (2026-10-08)"
 
+  # --- v0.13 (2026-10-27)
+  - id: R29
+    pattern: "the HEAVY_SEVEN tuple in anchor_render.py (seven private project folder names)"
+    replacement: "seven entries: \"governance\" and example-project-1 to -6, with a comment telling an adopter to list their own"
+    why: "The cold-start measurement table named the author's seven heaviest projects; two of those
+          names were covered by no other rule, and publish_scan blocked them. Seven entries are kept
+          so the shipped test's '1 of 7 heavy rows' branch still holds. (2026-10-27)"
+    occurrences: 1
+    files: ["adapters/claude-code/anchor_render.py"]
+
+  - id: R30
+    pattern: "a private codename used as a quoted role name in a test"
+    replacement: "\"project-b\""
+    why: "Runs before R7. R7 would make the role \"PROJECT-B\", which is not a valid role name (lowercase
+          letters, digits, hyphens), and the shipped handoff test would fail for that reason alone. (2026-10-27)"
+    occurrences: 2
+    files: ["adapters/claude-code/test_handoff_resolve.py"]
+
+  - id: R31
+    pattern: "${_cs_root}/adapters/claude-code/, RENDERER=\"${ROOT}/adapters/claude-code/anchor_render.py\", and a test's
+             '&& pwd)/adapters/claude-code/anchor_render.py' (the forms R13 produces)"
+    replacement: "the same paths under governance/adapters/claude-code/"
+    why: "Runs after R13. The hooks RUN handoff_resolve.py and anchor_render.py from the adopter's workspace,
+          where bootstrap.sh installs them under governance/adapters/claude-code/; R13's repository path exists
+          only inside this repository. Same class as R23, but for code. (2026-10-27)"
+    occurrences: 4
+    files: ["adapters/claude-code/hooks/prompt_guardrail.sh", "adapters/claude-code/hooks/session_anchor.sh",
+            "adapters/claude-code/test_anchor_render.py"]
+
+  # --- v0.13 r2 (2026-10-28), from the bundle's external review
+  - id: R32
+    pattern: "' (<a job's time> LaunchAgent collision)' in the guard's deny text (the time is not listed: it IS the private value)"
+    replacement: ""
+    why: "A fact of the author's machine (when a scheduled job runs). The deny text keeps the window it read from the
+          adopter's own config. (2026-10-28)"
+  - id: R33
+    pattern: "'on this machine' in two lines of UNIVERSAL_SKILL_SPEC.md"
+    replacement: "'on the author's machine' / 'on some machines'"
+    why: "Machine-specific wording in a shipped spec. (2026-10-28)"
+  - id: R34
+    pattern: "two session-anchor pointers to the author's OPERATOR_CRAFT.md and CAPABILITY_INVENTORY.md"
+    replacement: ""
+    why: "The kit ships neither file, so every installed anchor pointed at nothing. (2026-10-28)"
+  - id: R35
+    pattern: "the installer's discovery docstring ('NEOCORTEX/ or BRAIN/ ... excluding ROOT itself and any governance/ subtrees')"
+    replacement: "'NEOCORTEX/ ... ROOT itself included. BRAIN-only projects are not discovered.'"
+    why: "The docstring described an older rule than the code runs. (2026-10-28)"
+  - id: R36
+    pattern: "a private skill name in comments"
+    replacement: "example_scraper"
+    why: "Names a private tool; the comments only need an example. (2026-10-28)"
+  - id: R33c
+    pattern: "'This machine's interactive shell' in UNIVERSAL_SKILL_SPEC.md"
+    replacement: "'The author's interactive shell'"
+    why: "A third machine-specific phrasing in the paragraph R33 rewrites. (2026-10-28)"
+  - id: R37
+    pattern: "the author's window times (not listed, same reason as R32) as sed sample values in two guard tests"
+    replacement: "'s/12:00/00:00/'"
+    why: "A fact of the author's machine. The tests only need a write to a governed file. (2026-10-28)"
+  - id: R37b
+    pattern: "the author's window time (not listed, same reason as R32) as a sample value in the hook-integrity test"
+    replacement: "'12:00-12:30'"
+    why: "A fact of the author's machine. The test only needs a value that differs from the one approved after it. (2026-10-28)"
+  # --- v0.13 r4 (2026-10-28), from the second external review (a delta review of r3)
+  - id: R38
+    pattern: "an interpreter remark about the author's machine, in three comments"
+    replacement: "'an older system Python'"
+    why: "A fact of the author's machine. Already public in v0.12 and earlier; removed from the current tree. (2026-10-28)"
+  - id: R38b
+    pattern: "the author's scheduled job, named in the closeout lint's docstring"
+    replacement: "'a script ... while a LaunchAgent plist runs it'"
+    why: "A fact of the author's machine. Already public in v0.12 and earlier. (2026-10-28)"
+  - id: R38c
+    pattern: "that job's run time, in a closeout lint comment"
+    replacement: "'its run time'"
+    why: "A fact of the author's machine. Already public in v0.12 and earlier. (2026-10-28)"
+  - id: R39
+    pattern: "the author's monthly audit, named as what re-runs the self-test (POLICY_CORE)"
+    replacement: "'the adopter'"
+    why: "The monthly audit is not shipped. (2026-10-28)"
+  - id: R39b
+    pattern: "the monthly audit, named as a caller of test_hooks.sh"
+    replacement: "'a scheduled job of your own'"
+    why: "The monthly audit is not shipped. (2026-10-28)"
+  - id: R39c
+    pattern: "monthly_audit.py, named as a runner of the manifest validator (NEOCORTEX_SPEC)"
+    replacement: "'the author also ran it from a monthly fleet audit, not shipped'"
+    why: "An unshipped script must not read as part of the kit. (2026-10-28)"
+  - id: R40
+    pattern: "a backticked, dated private record name (DECISION_/PLAN_/NOTE_/AUDIT_/REFLECTION_...md)"
+    replacement: "the same, followed by '(private, not shipped)'"
+    why: "Specs cite the author's records for provenance; marked in place. (2026-10-28) Scope: extracted files, backticked
+          form only. The public_only adversarial_review/SKILL.md is marked by hand (as R24). Code comments and test fixtures
+          that name records unbackticked are not rewritten; the README's provenance sentence covers them. (2026-10-29)"
+  - id: R41
+    pattern: "a private skill name in a comment of lint_dispatch_class.py"
+    replacement: "example_llm_client"
+    why: "Names a private tool; the comment only needs an example. (2026-10-28)"
+  - id: R42
+    pattern: "the adapter README's status line (v1.0, 2026-06-10)"
+    replacement: "the same, with 'table updated 2026-10-28'"
+    why: "The table it heads changed in v0.13. (2026-10-28)"
+  - id: R43
+    pattern: "a session_anchor.sh comment describing pointers R34 removed"
+    replacement: "a comment saying the L0 line stands alone"
+    why: "The comment must describe the shipped line. (2026-10-28)"
+  - id: R43b
+    pattern: "'(14 articles)' in the anchor's L0 line"
+    replacement: "'(14 articles and one amendment)'"
+    why: "The constitution carries Amendment I. (2026-10-28)"
+  # --- v0.13 r5 (2026-10-29), from the third external review (a delta review of r4)
+  - id: R44
+    pattern: "the stock interpreter's patch version, left in three comments after R38"
+    replacement: "'3.9'"
+    why: "R38 removes the interpreter remark; the version the syntax must parse under is all these comments need.
+          Already public in v0.12 (session_anchor.sh). (2026-10-29)"
+  # --- v0.13 r6 (2026-10-29), from the fourth external review (a delta review of r5)
+  - id: R45
+    pattern: "'governance/adapters/<harness>/' in POLICY_CORE (the form R13 does not match)"
+    replacement: "'adapters/<harness>/'"
+    why: "Layout: the self-test ships at adapters/claude-code/test_hooks.sh. Already in v0.12. (2026-10-29)"
+  - id: R45b
+    pattern: "an unbackticked, dated private record name in POLICY_CORE's ASK-SESSION-RECORD row"
+    replacement: "the same, backticked and followed by '(private, not shipped)', as R40 does"
+    why: "R40 matches only backticked names. Code comments that cite records this way are covered by the README's
+          provenance sentence; test fixtures use such names as data and are not rewritten. (2026-10-29)"
+
 # Deliberate, reviewed hits that the §4 gate is configured to allow. Anything not
 # listed in publish_scan.py's EXCEPTIONS fails the gate.
-declared_exceptions:
-  - file: LICENSE
-    pattern: owner-name
-    why: "A copyright notice must name its holder. Scrubbing it protects nothing and
-          would make the licence unenforceable."
+declared_exceptions:   # mirrors the 8 EXCEPTIONS in publish_scan.py (2026-10-28)
+  - {file: LICENSE, pattern: owner-name, why: "A copyright notice must name its holder."}
+  - {file: LICENSE, pattern: owner-name, why: "The same notice in its pre-2026-08 form, in published history."}
+  - {file: NOTICE, pattern: owner-name, why: "As above, in NOTICE."}
+  - {file: governance/scripts/continuity_sweep.py, pattern: absolute-home-path, why: "The prefix list the sweep uses to recognise absolute paths, not a path."}
+  - {file: governance/scripts/continuity_sweep.py, pattern: local-database, why: "A list of file extensions, not a database filename."}
+  - {file: ANTIGRAVITY.md, pattern: absolute-home-path, why: "A rule forbidding hardcoded paths, citing the sandbox paths it forbids (published history)."}
+  - {file: ANTIGRAVITY.md, pattern: local-database, why: "A rule requiring these extensions be gitignored (published history)."}
+  - {file: adapters/claude-code/test_anchor_render.py, pattern: generic-secret-assign, why: "A synthetic token a test plants and asserts never leaks."}
 
 # ALREADY-PUBLISHED EXPOSURE — what a scrub of HEAD cannot reach.
 #
 # Editing a file removes it from the working tree, not from the commits already on the
 # remote. `publish_scan.py --full-history` enumerates this; it is recorded here so nobody
 # mistakes a clean tree for a clean repository. Audited 2026-08-25 over 20 commits.
-historical_exposure:
+# The last two entries are not exposure: they declare two names the current tree keeps on
+# purpose (the clone URL's account, the copyright holder), beside the exposure they relate to.
+historical_exposure:   # re-audited 2026-10-29 over every commit reachable from HEAD; public base after the rewrite: 75c6116 (formerly 4a5b001)
   - what: "a third party's surname, as INCIDENT_<NAME>_20260309"
-    commits: ["70a1362", "9f08aec"]
-    status: "SCHEDULED FOR REMOVAL by history rewrite (founder ruling 2026-08-25)"
-  - what: "a private project codename"
-    commits: ["9f08aec", "7ad7d53", "02addac"]
-    status: "scrubbed from HEAD; present in published history"
-  - what: "a home-directory path and local database filenames"
-    commits: ["d6e8461"]
-    status: "scrubbed from HEAD; present in published history"
+    status: "REMOVED by the 2026-08 history rewrite: every reachable commit reads INCIDENT_CONTACT_DELETION_20260309.
+             The commit ids this file used to cite predate that rewrite and no longer exist."
+  - what: "a second third party's surname, as an incident label dated 20260402 (docs/safety-rules.md, 14 commits:
+           added in 405b073, deleted in 8a3ef05; list them with `git log --oneline 405b073~1..8a3ef05~1`)"
+    status: "REMOVED by the 2026-10-28 history rewrite (founder ruling 2026-10-28), published with v0.13 (r8)."
+  - what: "the author's contact e-mail in the author and committer fields of every commit"
+    status: "RE-AUTHORED in the same 2026-10-28 rewrite with a no-reply address (founder ruling 2026-10-28); the
+             name stays (the copyright holder)."
+  - what: "a private project codename; a home-directory path and local database filenames"
+    status: "not found in any commit reachable from the published tip by publish_scan's history scan with the
+             private term list (re-run 2026-10-28 on r4 and 2026-10-29 on r5 to r8). An unpublished intermediate v0.13
+             commit held a script with a home path and a job's run time; v0.13 folds the unpublished commits into one, so it was never
+             published. The ids cited before the 2026-08 rewrite no longer exist."
+  - what: "machine facts in comments (an interpreter remark, a scheduled job and its run time) in closeout_lint.py,
+           stop_closeout_gate.py, skill_index_regen.py and test_stop_closeout_advisory.py; the stock interpreter's
+           patch version in session_anchor.sh; the author's forbidden-window and job times in pretool_guard.py's deny
+           text and in two hook tests"
+    status: "PUBLISHED in v0.12 and earlier; removed from the current tree by R38-R38c (2026-10-28), R32, R37, R37b
+             (2026-10-28) and R44 (2026-10-29). History keeps them. This map names those rules without their values."
+  - what: "a class, not a list: names, folders and figures from the author's private workspace kept in code, comments,
+           tests and specs. For example: skills (local_llm, notify, sprint_closeout, github_commit_audit, visual_audit,
+           calendar_bridge, applescript_bridge, applescript_operations, strategic_rebase), files and folders
+           (llm_client.py, supervisor.py, dashboard_app.py, cold_start_ledger.jsonl, OPERATOR_CRAFT.md,
+           _interaction_log/), and fleet or corpus figures ('62 of 133', '48 of 60', '1 of 22', '~13 of 22',
+           '(9 projects)', a transcript count in closeout_lint.py)"
+    status: "KEPT and declared as a class (r5; examples widened in r6 and r7, 2026-10-29). No list of such names can be
+             shown complete, so none is claimed. Each example above was already public in v0.12 (75c6116), except three
+             new mentions of _interaction_log/ in v0.13. They name the author's tools for provenance and none is shipped
+             (README, Status). Renaming would change code (judges.py imports local_llm in its default model call) without
+             reducing exposure. The examples can be found with `git grep -n -w -E 'local_llm|notify|sprint_closeout|github_commit_audit|visual_audit|calendar_bridge|applescript_bridge|applescript_operations|strategic_rebase|llm_client.py|supervisor.py|dashboard_app.py|cold_start_ledger.jsonl|OPERATOR_CRAFT|_interaction_log|62 of 133|48 of 60|1 of 22|13 of 22|9 projects|transcripts' -- . ':!redaction_map.yaml'`."
+  - what: "the owner's account name, lower case, in README's clone URL"
+    status: "INTENTIONAL — it is this repository's own address. publish_scan's owner-name class is case-sensitive and
+             does not match it; case-folding that class (with this URL and the no-reply identity as exceptions) is
+             planned for the next version."
   - what: "the copyright holder's name in LICENSE and NOTICE"
-    commits: ["99f4a98"]
     status: "INTENTIONAL — see declared_exceptions"
 
 # Content that exists only here and has no workspace counterpart.

@@ -1,17 +1,25 @@
 #!/bin/bash
 # session_anchor.sh — ANCHOR policy (POLICY_CORE.md), Claude Code adapter.
 # SessionStart hook (matchers: startup | resume | compact). Stdout becomes
-# session context. Injects: Constitution pointer, the skill index (bounded),
-# the open fleet-work backlog (governance/OPEN_WORK.md, one line per item),
-# and the working directory's NEOCORTEX manifest + status — or a legacy-BRAIN
-# notice for non-migrated projects (transitional clause).
+# session context. Injects: Constitution pointer (one line: L0, reasoning craft, capability
+# inventory), the skill index (bounded), the open fleet-work backlog (governance/OPEN_WORK.md,
+# one line per item) at the workspace root and in governance/ only, and the NEOCORTEX manifest +
+# status of the nearest project at or above the working directory — or a legacy-BRAIN notice for
+# non-migrated projects (transitional clause).
+# PLAN_cold_start_context_reduction_2026-10-24.md v0.3 §11 (validated 2026-10-26; S1, S2, S6):
+#   S1 — the manifest and status are rendered by adapters/claude-code/anchor_render.py
+#        (ACTIVE index + binding blocks, bounded, rc contract §11.B.3); any helper failure prints
+#        a loud line and falls back to today's rendering (_safe_neocortex_cat, unchanged).
+#   S2 — banner line deleted, L0 + craft lines folded into one, "Judgment layer" echo deleted
+#        (its path sits in the L0 line), OPEN_WORK digest only at ROOT and in governance/.
+#   S6 — the project is found by walking up from $PWD to ROOT (NEOCORTEX/ only), not $PWD alone.
 # ROOT = the workspace root, derived from this script's own location — NOT from
 # CLAUDE_PROJECT_DIR, which equals the per-project dir when a session starts
 # inside a project (e.g. PROJECT-A's repo) and would break all governance paths.
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # INTERPRETER — resolved ONCE here; never bare `python3` below. `machine_config.yaml` names this
-# hazard: `python3` is PATH-DEPENDENT and `/usr/bin/python3` is 3.9.6, while governance scripts are
-# provisioned for 3.12. Measured 2026-08-27: all four heredocs below parse under 3.9.6 (4/4), so
+# hazard: `python3` is PATH-DEPENDENT and `/usr/bin/python3` is 3.9, while governance scripts are
+# provisioned for 3.12. Measured 2026-08-27: all four heredocs below parse under 3.9 (4/4), so
 # this was a LATENT trap, not a live break. It still had to close, because every call site below
 # is `2>/dev/null` — the day one of them gains 3.10+ syntax it dies SILENTLY and the cold-start
 # anchor degrades with no error anywhere, which is this workspace's most expensive defect class.
@@ -55,10 +63,11 @@ except OSError:
     pass
 PY
 
-echo "=== PAICodeConstitution-2026 anchor (auto-injected) ==="
-echo "L0 RATIFIED v1.0: ${ROOT}/PAICodeConstitution-2026.md (14 articles)."
+# S2 (PLAN_cold_start v0.3 §2 S2, §11.C D-3): the "=== ... anchor ===" banner is gone, and the L0 line stands
+# alone here (the reasoning-craft and capability pointers are not shipped, R34; it replaces the "Judgment
+# layer beside these facts" echo that used to follow the skill index).
+echo "L0 RATIFIED v1.0: ${ROOT}/PAICodeConstitution-2026.md (14 articles and one amendment)."
 echo "Routing: declare task classes per governance/routing_policy.yaml; machine facts: governance/machine_config.yaml."
-echo "Reasoning craft (advisory, zero mechanical enforcement — how to reason to satisfy L0): ${ROOT}/governance/OPERATOR_CRAFT.md."
 
 # H4c + H0 (PLAN_hooks_outcome_tamper_loopbound_2026-10-05): governor tamper evidence, and the count
 # of hook exceptions swallowed in the last 24 h. Prints NOTHING when the live hooks match the approved
@@ -150,14 +159,38 @@ PY
 if [ -n "$SKILL_IDX_OUT" ]; then
   echo "--- Skill index (generated; check before building — Art. 7) ---"
   printf '%s\n' "$SKILL_IDX_OUT"
-  echo "Judgment layer beside these facts: ${ROOT}/_skills/CAPABILITY_INVENTORY.md (consumption recipes · shared/local/orphan class · reinvention map — read before building a capability)."
 else
   echo "Skill index not yet generated (plan Phase 4); registry at ${ROOT}/_skills/ — check before building (Art. 7)."
 fi
 
+# S6 (PLAN_cold_start v0.3 §10.6, F10): PROJ = the nearest of $PWD and its ancestors that holds a NEOCORTEX/
+# directory, never above ROOT (inclusive). A session started in src/ or a sub-folder of a project used to get no
+# manifest and no status at all (the old test looked at $PWD alone). The walk is by string (${_d%/*}), with no
+# realpath, and stops at ROOT. A $PWD outside ROOT keeps today's behaviour: only $PWD is tested.
+# NEOCORTEX/ alone is the marker, not CLAUDE.md: PROJECT-C has an inherited CLAUDE.md only (§10.6 over §2).
+PROJ=""
+case "$PWD/" in
+  "$ROOT/"*)
+    _d="$PWD"
+    while [ -n "$_d" ]; do
+      if [ -d "${_d}/NEOCORTEX" ]; then PROJ="$_d"; break; fi
+      [ "$_d" = "$ROOT" ] && break
+      _d="${_d%/*}"
+    done
+    ;;
+  *)
+    [ -d "${PWD}/NEOCORTEX" ] && PROJ="$PWD"
+    ;;
+esac
+
 OW="${ROOT}/governance/OPEN_WORK.md"
+# S2 (PLAN_cold_start v0.3 §2 S2): the backlog digest is read only when the session starts at the workspace root
+# or in governance/ (PROJ resolved above); a project session carries its own STATUS instead. Taken literally this
+# also drops the digest for a cwd that is a git worktree root of the workspace (ROOT/.claude/worktrees/<name>).
 # O_NOFOLLOW + regular-file-only read of the fixed, ROOT-relative backlog. Path passed
 # via env (never interpolated into the python source); a symlink here is refused.
+OPEN_WORK_OUT=""
+if [ "$PWD" = "$ROOT" ] || [ "$PROJ" = "${ROOT}/governance" ]; then
 OPEN_WORK_OUT="$(_OW="$OW" "$PY_BIN" - <<'PY' 2>/dev/null
 import os, re, stat, sys
 try:
@@ -180,6 +213,7 @@ except OSError:
     sys.exit(0)
 PY
 )"
+fi
 if [ -n "$OPEN_WORK_OUT" ]; then
   echo "--- Open fleet work (governance/OPEN_WORK.md) ---"
   printf '%s\n' "$OPEN_WORK_OUT"
@@ -209,9 +243,30 @@ except OSError:
 PY
 }
 
-if [ -d "${PWD}/NEOCORTEX" ]; then
-  [ -f "${PWD}/NEOCORTEX/MANIFEST.json" ] && { echo "--- NEOCORTEX/MANIFEST.json ---"; _safe_neocortex_cat "${PWD}/NEOCORTEX/MANIFEST.json"; }
-  [ -f "${PWD}/NEOCORTEX/STATUS.md" ] && { echo "--- NEOCORTEX/STATUS.md ---"; _safe_neocortex_cat "${PWD}/NEOCORTEX/STATUS.md"; }
+# S1 (PLAN_cold_start v0.3 §11.B.3, R2-04): the manifest + status of PROJ are rendered by the helper. Its rc is
+# ALWAYS read (no 2>/dev/null on the call; its stderr is one content-free line) and its output is printed only
+# for rc 0 (rendered) or rc 2 (valid empty manifest) AND only when it starts with a "--- NEOCORTEX/" header: Python
+# itself exits 2 when it cannot open its script, so the header check closes that rc-2 collision. Anything else
+# (helper absent, a symlink, a bad interpreter = rc 127, any other rc, no header) prints one loud line carrying the
+# real rc and then today's rendering through _safe_neocortex_cat, unchanged. A partial view is never printed.
+RENDERER="${ROOT}/governance/adapters/claude-code/anchor_render.py"
+if [ -n "$PROJ" ]; then
+  NC="${PROJ}/NEOCORTEX"
+  if [ -e "$NC/MANIFEST.json" ] || [ -L "$NC/MANIFEST.json" ] || [ -e "$NC/STATUS.md" ] || [ -L "$NC/STATUS.md" ]; then
+    _rc=127; _view=""
+    if [ -f "$RENDERER" ] && [ ! -L "$RENDERER" ]; then
+      _view="$("$PY_BIN" -I "$RENDERER" render "$PROJ")"; _rc=$?
+    fi
+    _ok=0
+    case "$_rc" in 0|2) case "$_view" in "--- NEOCORTEX/"*) _ok=1 ;; esac ;; esac
+    if [ "$_ok" = 1 ]; then
+      printf '%s\n' "$_view"
+    else
+      echo "ANCHOR RENDERER FAILED (rc=${_rc}): today's rendering follows"
+      [ -f "$NC/MANIFEST.json" ] && { echo "--- NEOCORTEX/MANIFEST.json ---"; _safe_neocortex_cat "$NC/MANIFEST.json"; }
+      [ -f "$NC/STATUS.md" ] && { echo "--- NEOCORTEX/STATUS.md ---"; _safe_neocortex_cat "$NC/STATUS.md"; }
+    fi
+  fi
 elif [ -d "${PWD}/BRAIN" ]; then
   echo "Legacy BRAIN/ project (not yet migrated): ANTIGRAVITY-2025 conventions apply here; follow this project's CLAUDE.md read order."
 fi

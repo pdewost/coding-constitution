@@ -115,7 +115,8 @@ def main() -> None:
     if not fp or not path.is_file():
         sys.exit(0)
 
-    if fp.endswith(".py"):
+    low = fp.lower()     # N29 / A2 4b-2 (2026-10-26): `bad.PY` skipped the syntax check; the extension is case-insensitive
+    if low.endswith(".py"):
         py = _python312()
         if py:
             rc, err = run([py, "-m", "py_compile", fp])
@@ -123,25 +124,25 @@ def main() -> None:
                 block(f"py_compile failed for {fp}: {err}")
         else:
             _disabled("python3.12 not found (the 3.9 system python would misjudge 3.10+ syntax)")
-    elif fp.endswith((".sh", ".bash")):
+    elif low.endswith((".sh", ".bash")):
         rc, err = run(["bash", "-n", fp])
         if rc != 0:
             block(f"bash -n failed for {fp}: {err}")
-    elif fp.endswith(".zsh"):
+    elif low.endswith(".zsh"):
         if shutil.which("zsh"):
             rc, err = run(["zsh", "-n", fp])
             if rc != 0:
                 block(f"zsh -n failed for {fp}: {err}")
         else:
             _disabled("zsh not found")
-    elif fp.endswith((".js", ".mjs", ".cjs")):
+    elif low.endswith((".js", ".mjs", ".cjs")):
         if shutil.which("node"):
             rc, err = run(["node", "--check", fp])
             if rc != 0:
                 block(f"node --check failed for {fp}: {err}")
         else:
             _disabled("node not found")
-    elif fp.endswith((".json", ".ipynb")):
+    elif low.endswith((".json", ".ipynb")):
         try:
             with open(fp, encoding="utf-8") as fh:
                 json.load(fh)
@@ -149,7 +150,7 @@ def main() -> None:
             block(f"invalid JSON in {fp}: {exc}")
         except OSError:
             pass
-    elif fp.endswith(".applescript"):
+    elif low.endswith(".applescript"):
         try:
             if "¬" in path.read_text(errors="replace"):
                 block(f"'¬' line-continuation found in {fp} — use explicit string "

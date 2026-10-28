@@ -8,7 +8,7 @@ Defect this gate closes (2026-07-28): `build_index.py` already compared a skill'
 frontmatter / title-line / metadata.json versions and `--strict` already exited 1 —
 but NOTHING consumed that signal. The only automated caller (skill_index_regen.py)
 runs lenient by contract and always exits 0, so the drift printed to stderr on every
-run and was never read. `linkedin_scraper` sat split across FOUR sources
+run and was never read. `example_scraper` sat split across FOUR sources
 (frontmatter 2.3.0 / title v2.1 / metadata.json 2.2.0 / scripts/__init__.py 1.0.0).
 An unread warning is not a gate.
 

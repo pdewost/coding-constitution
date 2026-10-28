@@ -1,0 +1,71 @@
+{
+ "spec": "fixture",
+ "project": "Fixture",
+ "updated": "2026-10-26",
+ "archive": {
+  "exists": true,
+  "span": "2026-05 .. 2026-09"
+ },
+ "files": [
+  {
+   "file": "A_absent_2026-10-01.md",
+   "genre": "NOTE",
+   "status": "no state"
+  },
+  {
+   "file": "B_active_2026-10-02.md",
+   "genre": "PLAN",
+   "status": "in progress",
+   "status_state": "active"
+  },
+  {
+   "file": "C_shipped_2026-10-03.md",
+   "genre": "PLAN",
+   "status": "SHIPPED clean",
+   "status_state": "shipped"
+  },
+  {
+   "file": "D_shipped_residual_2026-10-04.md",
+   "genre": "PLAN",
+   "status": "SHIPPED 10-04; one residual open",
+   "status_state": "shipped"
+  },
+  {
+   "file": "E_resolved_active_2026-10-05.md",
+   "genre": "NOTE",
+   "status": "ACTIVE: reopened",
+   "status_state": "resolved"
+  },
+  {
+   "file": "F_done_2026-10-06.md",
+   "genre": "NOTE",
+   "status": "DONE",
+   "status_state": "done"
+  },
+  "not an object",
+  {
+   "file": "G_superseded_2026-10-07.md",
+   "genre": "PLAN",
+   "status": "replaced by the next one",
+   "status_state": "superseded"
+  },
+  {
+   "file": "H_resolved_2026-10-08.md",
+   "genre": "NOTE",
+   "status": "RESOLVED",
+   "status_state": "resolved"
+  },
+  {
+   "file": "I_weird_2026-10-09.md",
+   "genre": "NOTE",
+   "status": "x",
+   "status_state": 5
+  },
+  {
+   "file": "J_null_state.md",
+   "genre": "NOTE",
+   "status": "null state",
+   "status_state": null
+  }
+ ]
+}

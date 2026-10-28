@@ -1,8 +1,8 @@
 # L1 Policy Core — harness-neutral enforcement definitions
-Status: ACTIVE · v1.3 · 2026-08-27 (CONTEXT-GUARD: vendor-neutral SESSION TOKEN clause)
+Status: ACTIVE · v1.4 · 2026-10-27 (HANDOFF: cold-start resume from the handoff convention, founder 2026-10-26/27) · v1.3.1 2026-10-26 (ASK-SESSION-RECORD retired by record, founder N31) · v1.3 2026-08-27 (CONTEXT-GUARD: vendor-neutral SESSION TOKEN clause)
 
 Each policy below is implemented by a per-harness adapter
-(`governance/adapters/<harness>/`). The policy is normative; adapters are
+(`adapters/<harness>/`). The policy is normative; adapters are
 dumb translators into the harness's native mechanism. A new harness means a
 new adapter, never a policy rewrite. Data values (windows, ports) come from
 `governance/machine_config.yaml` — policies reference, never embed, them.
@@ -11,11 +11,12 @@ new adapter, never a policy rewrite. Data values (windows, ports) come from
 |---|---|---|---|
 | ANCHOR | Inject cold-start context: Constitution pointer, project NEOCORTEX MANIFEST + STATUS (or legacy-BRAIN notice), skill index (≤40 lines) | Session start, resume, and post-compaction | Add to context (replaces 2025 §9bis "re-read Tier 0" ceremony) |
 | GUARDRAIL | Inject a task-aware checklist: planning prompts → task-class budgets + PLAN-before-code threshold + **propose adversarial review of drafted PLANs before validation, with reasons** (NEOCORTEX_SPEC §3 gate); destructive prompts → dry-run/apply gates + project invariants; otherwise → one rotated Art. 1/2/6 reminder (rotation defeats habituation) | Every user prompt | Add ≤4 lines to context (mechanizes the user's 2025-era manual guardrail suffix) |
+| HANDOFF | Resume a role from its predecessor's handoff with nothing pasted: inject the session folder's open handoff, i.e. per role the newest `<project>/NEOCORTEX/HANDOFF_<role>_<YYYY-MM-DD>_<HHMM>Z.md` by name (UTC stamp; older files superseded by name, never edited; a git worktree path counts as its main checkout; nested projects pool their roles). Answers: RESOLVED (one open role: its path + its `## Cold start` section, preflight first), CHOOSE (several: the list, and ask the founder), NONE (old-format candidates listed, never served), CLOSED, NOT-FOUND — never a guess; a resolver failure on a bare trigger is one loud line | User prompt `cold start` (case/whitespace-insensitive; also `cold-start`, `coldstart`), alone or + one role slug | Add one block ≤ 6 KiB to context after the GUARDRAIL lines |
 | COMPILE-GATE | Syntax-check every edited file: `.py` → py_compile; `.sh` → `bash -n`; `.applescript` → reject `¬` then `osacompile -o /dev/null` | After each file edit/write | Block with the error fed back (2025 §6.1). Import smoke tests are NOT in the gate — importing executes top-level code; they belong in the closeout procedure |
 | CLOSEOUT-GATE | Before a turn ends after code edits: verification commands ran this session? `JOURNAL.md` over its 64 KB bound? | Agent attempts to stop | Block once with the missing item named (never loops: respects the harness's re-entry flag) |
 | DENY-ARCHIVE | (a) `rm`/`mv`/`rmdir` touching `_archive/`, `ANTIGRAVITY-2025.md` or `PAICodeConstitution-2026.md`; (b) **in-place overwrite of `PAICodeConstitution-2026.md`** by any shell write form (`>`/`>>`, `sed -i`, `tee`, `truncate`, `dd of=`, or `cp`/`mv`/`rsync` with it as DEST). Scope = **both live copies** — the workspace-root authoritative L0 and the published clone under `GitHub example repositories/antigravity/`; matched by basename, so both are covered by one rule. The `.publish_staging/` copy is regenerated from root by `PROTOCOL_publish_regime.md` and is deliberately **unguarded** (a stated decision, not an omission) | Before tool execution | Deny (Art. 6: archives are never deleted; Constitution invariant 1: L0 is never edited mid-session without founder consent — **the founder owns every lift**). **Reads stay allowed** — the cold start reads L0 every session, so the guard matches write TARGETS only, never a file named as a reader's argument |
 | DENY-CONTACT-DELETE | AppleScript `delete person`/`delete people` in any command or script | Before tool execution | Deny (the 2026-03 contact-deletion incident; Art. 4) |
-| ASK-SESSION-RECORD | Reads/greps/globs of session-record stores (`_session_record/`, `governance/session_record/`) | Before tool execution | Ask (never silent-allow). Session content containing personal data is Art.-5 data wherever it travels; the archive is QUERIED, never ingested |
+| ASK-SESSION-RECORD | **RETIRED BY RECORD 2026-10-26** (founder, docket N31, "Retire by record"): the stores it gated (`_session_record/`, `governance/session_record/`) no longer exist; the dialog corpus is `_interaction_log/` (`DECISION_session_record_pii_and_ratification_2026-07-29` (private, not shipped), AMENDMENT 1: the access gate "is not resurrected", the query tool replaces it as the control). `session_record_gate.py` stays wired as a tripwire | Before tool execution (tripwire) | Ask on any path naming `session_record`. `_interaction_log/` is governed by `governance/scripts/query_interaction_log.py` (output hygiene, not a security boundary: root CLAUDE.md), not by this row. Session content containing personal data is Art.-5 data wherever it travels; the archive is QUERIED, never ingested |
 | SKILL-INDEX-REGEN | Edits/writes under `_skills/` | After tool execution | Regenerate the skill index so Art. 7's "discoverable through the generated index" cannot go stale between sessions |
 | DENY-WINDOW | Extraction/vectorization commands during `machine_config.yaml` forbidden windows | Before tool execution | Deny with the window cited (2025 §14) |
 | PUSH-AUDIT | Real `git push` executed | After tool execution | Feed the 6-check post-push audit instruction back (Phase 0, the adapter template) |
@@ -36,7 +37,7 @@ scope:** un-bypassable only on the remote+CI path; locally = in-session adapter 
 `pre-commit`. The judge-down fail-mode is fail-closed-with-`--override`, never silent fail-open.
 
 **CONTEXT-GUARD — thresholds, degradation, and the fail-mode bound (2026-08-26, P0.0b).**
-Delivers `PLAN_lifecycle_routing_evolution_2026-08-24.md` P0.0b; its Claude adapter is P0.2,
+Delivers `PLAN_lifecycle_routing_evolution_2026-08-24.md` (private, not shipped) P0.0b; its Claude adapter is P0.2,
 **held until that plan clears its own §3 gate** (founder ruling 2026-08-26). Policy precedes
 adapter by design invariant 2 — this stanza is normative now and binds whatever adapter lands.
 
@@ -96,5 +97,5 @@ first, the three days would not have been spent.
 token count and the guard must not assert precision it does not have.
 
 **Self-test duty (Art. 12):** every policy ships with a fire/no-fire test
-matrix (`governance/adapters/<harness>/test_hooks.sh`); the monthly audit
+matrix (`adapters/<harness>/test_hooks.sh`); the adopter
 re-runs it. A hook that cannot prove it fires is presumed dead.

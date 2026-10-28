@@ -65,7 +65,7 @@ def _title_version_matches_fm(fm_version, title_version) -> bool:
     """True iff the TITLE version agrees with the frontmatter version, comparing only the
     components the title specifies. So an ABBREVIATED title ('3.8' vs frontmatter '3.8.1',
     'v2.3' vs '2.3.0') is NOT a mismatch, but a genuine divergence ('v2.1' vs '2.3.0',
-    linkedin_scraper's live split) IS. This is what stops every 2-component title in the
+    example_scraper's live split) IS. This is what stops every 2-component title in the
     fleet from false-flagging against its 3-component semver frontmatter."""
     ft, tt = _version_tuple(fm_version), _version_tuple(title_version)
     if not tt:
@@ -173,7 +173,7 @@ _RE_IMPORT = re.compile(r"(?:from|import)\s+_skills\.([A-Za-z_]\w*)")
 _RE_PATH = re.compile(r"_skills/([A-Za-z_]\w*)")
 # Signal 1b — the sys.path.insert(<_skills root>) + BARE import form. Consumers that
 # splice the _skills/ dir onto sys.path import the skill by its *bare* package name
-# (`from linkedin_scraper.scripts.x import y`, `import PROJECT-C_analytics.PROJECT-C_analytics`)
+# (`from example_scraper.scripts.x import y`, `import PROJECT-C_analytics.PROJECT-C_analytics`)
 # — NOT `_skills.<name>`, so _RE_IMPORT misses them (PROJECT-B dashboard_app.py, PROJECT-C_analytics's
 # PROJECT-C consumer, applescript_bridge's callers). Anchored at import-statement position
 # (start-of-line, optional indent — these imports live inside if-blocks / functions) and the

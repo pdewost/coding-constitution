@@ -453,9 +453,8 @@ def _desired():
 
 def _discover_projects() -> list[pathlib.Path]:
     """
-    Return a sorted list of unique project root dirs (parent of NEOCORTEX/ or
-    BRAIN/) found within maxdepth MAX_DEPTH of ROOT, excluding ROOT itself
-    and any governance/ or .claude/ subtrees.
+    Return a sorted list of unique project root dirs (parent of NEOCORTEX/) found within maxdepth MAX_DEPTH of ROOT, ROOT itself
+    included. BRAIN-only projects are not discovered.
     """
     found: set[pathlib.Path] = set()
 

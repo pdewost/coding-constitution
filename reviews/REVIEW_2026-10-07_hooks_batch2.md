@@ -38,7 +38,7 @@ because they could be checked independently.
   diff is not optional.
 - **The cheapest finding was in packaging, not logic.** Three registered hooks had shipped without the
   executable bit, so for adopters they never ran. A test suite run from the author's own tree could not see
-  that. Running the install exactly as an adopter would (`bootstrap.sh --verify-only`) did.
+  that. Running the install exactly as an adopter would (`bootstrap.sh` into a fresh workspace, then `test_hooks.sh --root`) did.
 - **Severity drops fast once the method holds.** On a related build (a root-owned variant of these hooks, not
   yet published), three successive Codex rounds found 19, then 9, then 6 issues. None survived triage as HIGH
   after the first round, and the last round's findings were all in ask-only checks, documentation, a test, or a

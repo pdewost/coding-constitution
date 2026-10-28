@@ -14,7 +14,7 @@ DISPATCH-CLASS: adversarial@high
 
 The mechanical form of "Assume Independent Audit" (ANTIGRAVITY §15) — pure Python + shell,
 no harness plugin. Built advisory-first after 3 §3 adversarial-review rounds
-(`governance/PLAN_verify_gate_and_ux_verify_2026-06-20.md` REV 4 CONVERGED).
+(`governance/PLAN_verify_gate_and_ux_verify_2026-06-20.md` (private, not shipped) REV 4 CONVERGED).
 
 ## The one idea
 

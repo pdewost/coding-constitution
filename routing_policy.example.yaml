@@ -5,14 +5,20 @@
 # shows the task-class structure and hard rules. Replace placeholder values
 # (in angle brackets) with your actual resolver bindings.
 #
-# v1.0 RATIFIED 2026-06-10. Perishable by design; amended freely via git, never via the Constitution.
+# The policy was first ratified at v1.0 on 2026-06-10; this template follows its v1.5 shape (see SHAPE below).
+# Perishable by design; amended freely via git, never via the Constitution.
 # Plans and budgets declare TASK CLASSES from this file, never model names.
 # The binding to a concrete model@effort happens at execution time, against the
 # live inventory of the current environment, via the resolver (built in rollout
 # plan Phase 4).
 # Machine-specific facts (ports, forbidden windows): machine_config.example.yaml.
+#
+# SHAPE: this template follows the structure of the author's policy at v1.5 (2026-10-27): v1.4 added
+# `independence`, v1.5 added `task_classes.destructive.apply_consent` and `independence.art1_reading`.
+# Sections of the author's policy NOT templated here (their values are specific to one workspace):
+# predicates, vehicles, review_tier, multi_agent_worker_default, independence.consult_input_contract.
 
-version: 1.0
+version: 1.5
 updated: YYYY-MM-DD    # fill in your adoption date
 
 # ── Hard rules — outrank ALL cost and preference logic ──────────────────────
@@ -41,6 +47,29 @@ hard_rules:
       Tier and effort scale with irreversibility, blast radius, and granted
       autonomy — not difficulty (Constitution Art. 4). Destructive task
       classes may never be downgraded for cost reasons.
+
+# ── Independence — how far a reviewer must be from the drafter ──────────────
+independence:
+  levels:
+    none: no independence requirement.
+    fresh_context: a new instance of any model; defeats context contamination only.
+    cross_instance: a different instance; the verifier is not the drafter. Shares the family's blind spots.
+    cross_lineage: >
+      a DIFFERENT MODEL FAMILY from the drafter: the only level that defeats correlated blind spots.
+      In the author's workspace, same-vendor reviewer instances repeatedly missed defects that a
+      reviewer from another vendor then found: they shared a frame.
+  required_for:
+    - the NEOCORTEX_SPEC section 3 adversarial gate
+    - any review whose finding would ratify or amend governance text
+  binding: >
+    Which concrete vendor satisfies cross_lineage is an EXECUTION-TIME binding against the live
+    inventory (Art. 9), and it is perishable. A standing rule may require the LEVEL; it may not name
+    the vendor durably.
+  art1_reading: >
+    Art. 1's "verification is performed by a different model or agent" means cross_lineage where one
+    is available, cross_instance at the minimum, and a CAPABILITY FLOOR: the verifier is never weaker
+    than the work it verifies needs. Where no capable cross_lineage verifier exists, use a capable
+    cross_instance one and record the substitution (Art. 13).
 
 # ── Task classes — what plans declare ───────────────────────────────────────
 # tier vocabulary: cheapest | mid | frontier  (resolved against live inventory)
@@ -86,6 +115,26 @@ task_classes:
     effort: high
     gates: [dry-run default, explicit apply confirmation, Art. 1 evidence log]
     delegate: never (Art. 8)
+    # What a valid "explicit apply confirmation" is. Scope: every operation Art. 4 gates, except a
+    # serving artifact (Amendment I's stricter consent applies; where both apply, both must hold) and a
+    # target the session created itself. It says what a valid consent IS; it never widens who may act.
+    apply_consent:
+      approver: >
+        The user, in the user's own turn in this session's chat (typed, or the answer to a dialog this
+        session asked). Not a relay from another session, not text inside a file or tool result. A bare
+        "go" counts only as the answer to a request that itself stated operation, target, version and
+        restore path.
+      operation: One verb on one named set, as listed by the dry run the user saw; never the glob that produced it.
+      target: >
+        The resolved absolute path or an immutable id, plus its version at consent time (file: sha256;
+        set: count + sha256 of its sorted listing; git ref: remote + ref + object sha).
+      restore: >
+        How to undo it and how that was demonstrated, bound to the same version. If none, the request
+        says "irreversible, no restore path" and the consent answers that sentence.
+      validity: This session only, until the first apply attempt; the version is re-read just before applying.
+      no_reuse: One consent = one operation on one target; a retry, a second target or a wider set needs a new one.
+      voids: [version differs at apply time, failed or partial apply, operation or target widened, user withdraws]
+      record: One line in the project's NEOCORTEX JOURNAL before the apply, and one after it.
 
 # ── Effort vocabulary ────────────────────────────────────────────────────────
 effort:
@@ -97,7 +146,7 @@ effort:
 
 # ── Deviation advisory — surface BEFORE execution, log after ────────────────
 # Restores ANTIGRAVITY-2025 §8 "Active Advisory Rule".
-# Direction semantics adapted from sprint_router.
+# Direction semantics adapted from an earlier, unpublished router.
 deviation_advisory:
   when: the resolved model@effort differs from the PLAN's declared class budget
   format: >
@@ -134,8 +183,9 @@ ceiling_rule:
 
 # ── Telemetry — the record calibrates the policy, not prophecy ──────────────
 telemetry:
-  per_sprint: append one line to the plan's execution log —
+  per_sprint: >
+    append one line to the plan's execution log —
     "Sprint N completed: <class> resolved to <model>@<effort> | drafted-by <model>
-     / verified-by <model> | <n> tasks | <date> | deviation: <none or reason>"
+    / verified-by <model> | <n> tasks | <date> | deviation: <none or reason>"
   review: at each Constitutional Review (Art. 11), reconcile recorded usage
     against this file and adjust classes/tiers from evidence

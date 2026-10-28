@@ -1,0 +1,40 @@
+{
+ "spec": "fixture",
+ "files": [
+  {
+   "file": "PLAN_a_2026-10-01.md",
+   "genre": "PLAN",
+   "status": "s1"
+  },
+  {
+   "file": "undated_one.md",
+   "genre": "NOTE",
+   "status": "u1"
+  },
+  {
+   "file": "NOTE_b_2026-10-10.md",
+   "genre": "NOTE",
+   "status": "s3"
+  },
+  {
+   "file": "undated_two.md",
+   "genre": "NOTE",
+   "status": "u2"
+  },
+  {
+   "file": "TIE_x_2026-10-10.md",
+   "genre": "NOTE",
+   "status": "s5"
+  },
+  {
+   "file": "RANGE_2026-09-01_to_2026-10-15.md",
+   "genre": "NOTE",
+   "status": "s6"
+  },
+  {
+   "file": "NOTE_newest_2026-10-20.md",
+   "genre": "NOTE",
+   "status": "s7"
+  }
+ ]
+}

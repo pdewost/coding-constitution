@@ -91,11 +91,11 @@ time; full SKILL.md only when the skill is selected.
   index** (visible to every session) — it does not fail the build; one broken
   skill must never block fleet-wide registration.
 
-> **Footgun — manual consumer-count greps UNDERCOUNT on this machine.** `_skills/*`
+> **Footgun — manual consumer-count greps UNDERCOUNT on the author's machine.** `_skills/*`
 > is `.gitignore`'d (only `build_index.py` is tracked; `index.json`,
-> `SKILLS_INDEX.md`, and every `<skill>/SKILL.md` are untracked). This machine's
+> `SKILLS_INDEX.md`, and every `<skill>/SKILL.md` are untracked). The author's
 > interactive shell backs `rg`/`grep -r` with a **gitignore-aware** searcher, so a
-> casual `rg 'from linkedin_scraper'` or `grep -r … _skills/` silently skips the
+> casual `rg 'from example_scraper'` or `grep -r … _skills/` silently skips the
 > gitignored tree and reports **fewer consumers than exist** — the exact trap that
 > makes a hand-count contradict the generated index. To count by hand, defeat the
 > gitignore filter: `find <root> -name '*.py' -exec grep -l <pat> {} +` or
@@ -161,7 +161,7 @@ Carried over from v1.1 in substance, unchanged — these rules are battle-tested
 - **R-SHARED-5** — Memory-pressure default is fall-through, not block; opt-in
   waiting for consumers that need a specific backend. Tests must cover both.
 - **R-SHARED-6** — Skill state: **skills hold no `BRAIN/` or `NEOCORTEX/`** (NEOCORTEX is L3
-  project state; a skill is an L2 library — `governance/DECISION_skill_state_policy_2026-06-13.md`).
+  project state; a skill is an L2 library — `governance/DECISION_skill_state_policy_2026-06-13.md` (private, not shipped)).
   Durable operational rules live under a dedicated `SKILL.md` `## Operational Rules` heading (kept
   separate from the interface contract and the Changelog); version history is the mandated `SKILL.md`
   Changelog (R-SHARED-4); cross-consumer change coordination is delegated to consumers' NEOCORTEX.
@@ -175,4 +175,4 @@ any breaking change.
 ## 8. Testing
 
 v1.1 rules unchanged: `python3.12 -m pytest tests/ -v` (never bare `python3` —
-resolves to Xcode 3.9.6 on this machine); all green before `status: active`.
+resolves to an older system Python on some machines); all green before `status: active`.

@@ -30,7 +30,7 @@ THE INCIDENTS, because a check whose provenance is lost gets deleted by the next
       articles. The missing one governed the amendment process itself.
 
   #5  A docstring claimed a schedule that a LaunchAgent contradicts.
-      monthly_audit.py says "Schedule: none" while com.PROJECT-B.monthly-audit.plist runs it
+      a script says "Schedule: none" while a LaunchAgent plist runs it
       monthly. Found twice by independent reviewers before anyone acted.
 
   #6  MANIFEST status tokens drifted outside their enum. 38 on 2026-08-25 morning; 68 the
@@ -230,8 +230,8 @@ def _files(scope: pathlib.Path) -> list[pathlib.Path]:
 def _family(name: str) -> str:
     """A series' identity with its revision marker and trailing date removed.
 
-    `AUDIT_adversarial_drift_control_plan_rev2_2026-07-29.md` and
-    `AUDIT_adversarial_drift_control_plan_2026-07-29.md` are the same series written two ways;
+    `AUDIT_adversarial_drift_control_plan_rev2_2026-07-29.md` (private, not shipped) and
+    `AUDIT_adversarial_drift_control_plan_2026-07-29.md` (private, not shipped) are the same series written two ways;
     so are `..._2026-08-24.md` and `..._2026-08-24_rev8.md`. Comparing families instead of
     literal filenames is what lets one rule cover both conventions.
     """
@@ -549,7 +549,7 @@ def check_schedule_claims(scope: pathlib.Path) -> list[Finding]:
 
     The first cut matched two literals, `schedule: none` and `not currently scheduled`. On
     2026-08-26 `--only schedule-claim` returned CLEAN on a docstring that contradicted itself
-    four lines apart: line 5 named the plist and its 09:17 run time, line 19 said "Whether (and
+    four lines apart: line 5 named the plist and its run time, line 19 said "Whether (and
     how) to schedule it is an open founder decision." A reviewer found it; the check written for
     exactly this could not. A claim of not-being-scheduled is not one phrase, and an UNDECIDED
     claim is the same defect as a NONE claim — both assert no schedule exists.

@@ -103,7 +103,7 @@ def test_never_raises_on_garbage_input():
 
 def test_python312_is_pinned_never_sys_executable():
     """Regression guard for the workspace interpreter discipline: the advisory must not
-    inherit whatever python runs hooks (may be Xcode's 3.9.6)."""
+    inherit whatever python runs hooks (may be an older system Python)."""
     src = HOOK.read_text(encoding="utf-8")
     advisory = src[src.index("def _continuity_advisory"):src.index("def _journal_project_root")]
     assert "sys.executable" not in advisory, "advisory must pin python3.12, not sys.executable"

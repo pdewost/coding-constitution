@@ -21,7 +21,7 @@ DISPATCH-CLASS: adversarial@high
 
 **Purpose** — The single adversarial-review mechanism for every gate that the
 PAICodeConstitution-2026 regime declares: NEOCORTEX_SPEC §3 PLAN validation,
-`sprint_closeout` step 3, and ad-hoc founder audits. The regime supplies WHEN
+`sprint_closeout` (the author's, not shipped) step 3, and ad-hoc founder audits. The regime supplies WHEN
 and WHY; this skill supplies HOW. It **returns findings + a verdict; it never
 blocks anything itself — the CALLER blocks.**
 
@@ -31,11 +31,9 @@ blocks anything itself — the CALLER blocks.**
 |---|---|---|---|
 | PLAN strengthening (pre-validation gate) | `plan` | the PLAN .md + its predecessor artifacts | nothing external — the NEOCORTEX §3 gate made executable (4 loss modes, omissions, unenforceable mandates, unnamed deliverables) |
 | Code review (sprint closeout, diffs) | `code` | branch / diff / changed files | `/code-review` harness command **where available** (effort: skeptic→medium, panel→high); built-in refutation fallback otherwise — never silently zero findings |
-| Project-wide review (migration, "complete" claims) | `project` | project root (+ NEOCORTEX/) | `_skills/github_commit_audit` (doc-code coherence, stale claims, phantom paths) + Art. 6 cold-start probes + stale-token greps |
-| Visual design review | `visual` | running URL or screenshot set | `_skills/visual_audit` capture (FULL_PAGE / SELECTOR / SKETCH_TO_PROOF) or harness preview_* tools — **refuses to run text-only** |
+| Project-wide review (migration, "complete" claims) | `project` | project root (+ NEOCORTEX/) | `_skills/github_commit_audit` (not shipped; doc-code coherence, stale claims, phantom paths) + Art. 6 cold-start probes + stale-token greps |
+| Visual design review | `visual` | running URL or screenshot set | `_skills/visual_audit` (not shipped) capture (FULL_PAGE / SELECTOR / SKETCH_TO_PROOF) or harness preview_* tools — **refuses to run text-only** |
 | UX flow review | `ux` | running app + flow description | preview_* tools / visual_audit; dual-walkthrough (desktop→mobile) → walk-map → gallery → crumb-hunt; persona lenses (non-geek / copywriter / skeptic-lawyer); frontend checklist — **refuses to run text-only** |
-| Typeface design review | `typeface` | proof renders of produced glyphs (proof.html / <FONT>_PROOF.html) | Persona A — Principal Typographer (the typography project's `AUDIT_PERSONAS.md` §2): overshoot/optical balance, spacing rhythm, weight/contrast, metric integrity, revival fidelity, multi-script, accessibility — **refuses to run text-only** (requires_rendering) |
-| Font-tooling / engineering review | `font_tooling` | source repo (.glyphs/.ufo/.designspace) + build scripts + compiled font | Persona B — Font-Tooling/Rendering engineer (`AUDIT_PERSONAS.md` §3): build pipeline, contour/winding↔fill-rule fidelity, interpolation/designspace, metrics-as-proxy, color fonts, QA-gate scoping — runs on source + binaries |
 | Composed (PROJECT-B, then each fleet project) | several packs | per-pack artifacts | run packs independently → `merge_findings.py` dedups across packs → ONE merged verdict. Tier `workflow` requires explicit user opt-in before fan-out |
 
 ## Effort tiers (Art. 4 — stakes, not difficulty)
@@ -87,11 +85,11 @@ blocks anything itself — the CALLER blocks.**
 | Existing capability | Used by | How |
 |---|---|---|
 | `/code-review` (harness command) | `code` pack | sole delegate when present; pack carries fallback prompt when absent |
-| `_skills/github_commit_audit` | `project` pack | executed as a procedure for repo/doc-coherence evidence |
-| `_skills/visual_audit` | `visual`, `ux` packs | `scripts/capture.py` screenshots = `render_capture` evidence |
+| `_skills/github_commit_audit` (not shipped) | `project` pack | executed as a procedure for repo/doc-coherence evidence |
+| `_skills/visual_audit` (not shipped) | `visual`, `ux` packs | `scripts/capture.py` screenshots = `render_capture` evidence |
 | preview_* tools (harness) | `ux`, `visual` packs | live walkthrough evidence when the harness offers a browser |
 | Agent tool / Workflow tool | harness steps 3 | independent reviewer spawning; workflow tier (opt-in) |
-| `_skills/sprint_closeout` | CALLER | step 3 invokes this skill; its telemetry line feeds `--drafter` |
+| `_skills/sprint_closeout` (not shipped) | CALLER | step 3 invokes this skill; its telemetry line feeds `--drafter` |
 
 ## Common Gotchas
 
@@ -132,10 +130,10 @@ blocks anything itself — the CALLER blocks.**
 - **1.0.0** (2026-06-27) — S6 calibration gate PASSED (C0 cycle 2 / C1 / C2 / C3 all 100%
   HIGH recall; C4 rendering-blocked, deferred to first real run). Inline review due to
   monthly spend limit; scorer=reviewer deviation noted in
-  `governance/AUDIT_adversarial_S6_calibration_2026-06-27.md`. Status promoted:
+  `governance/AUDIT_adversarial_S6_calibration_2026-06-27.md` (private, not shipped). Status promoted:
   `incubating → active`. First production use: PROJECT-B broad review 2026-06-10 (pre-promotion,
   recorded as second production use in OPEN_WORK). All probes independently reproducible.
   drafted-by Sonnet 4.6 / scored-by Sonnet 4.6 (deviation per AUDIT).
-- **0.9.0** (2026-06-10) — Initial build per `PLAN_adversarial_review_skill_2026-06-10.md`
+- **0.9.0** (2026-06-10) — Initial build per `PLAN_adversarial_review_skill_2026-06-10.md` (private, not shipped)
   (S0–S5). Status `incubating` until the S6 calibration gate (C0–C4) passes and the
   first production consumer invokes it; then 1.0.0 / `active`.

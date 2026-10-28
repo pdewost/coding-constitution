@@ -28,16 +28,17 @@ and do no harm.
 
 | Layer | Holds | Medium | Amended |
 |---|---|---|---|
-| **L0 — Constitution** | This file: principles only | Prose, ≤190 lines (budget extended 2026-06-20 for the Independence Preamble; first amended at Amendment I, 2026-06-10) | Constitutional Review only (Art. 11) |
+| **L0 — Constitution** | This file: principles only | Prose, ≤190 lines | Constitutional Review only (Art. 11) |
 | **L1 — Enforcement** | Hooks, permission rules, tests, CI | Machine-executed; per-harness adapters in `governance/adapters/` | Freely, via git |
 | **L2 — Procedures** | `_skills/` registry | Skills, loaded on demand | Per `UNIVERSAL_SKILL_SPEC` |
 | **L3 — Project state** | `NEOCORTEX/` in each project | Per `NEOCORTEX_SPEC` | Every working session |
 | **L4 — Reference data** | `governance/` data files (routing policy, machine config) **and the binding specs themselves** (`NEOCORTEX_SPEC`, `UNIVERSAL_SKILL_SPEC`) | Data files + specs | Freely, via git |
 
-**The Sorting Rule.** A rule earns L0 prose only if it cannot be expressed as a
-hook, a permission, a test, or a skill. Prose is the medium of last resort.
-Lower layers implement L0 and may never contradict it. Perishable facts —
-model names, prices, ports, schedules, project specifics — never appear in L0.
+**The Sorting Rule.** L0 holds durable obligations, with the bounds they state,
+and authority boundaries; their procedures, checks and tunable criteria belong
+in lower layers. Prose is the medium of last resort. Lower layers implement L0
+and may never contradict it. Perishable facts — model names, prices, ports,
+schedules, project specifics — never appear in L0.
 
 ---
 
@@ -83,22 +84,23 @@ publishable; personal data lives on local disk and never enters any git
 history; project state lives in `NEOCORTEX/`, outside published history.
 **Published history means any repository with a remote.** State may be
 tracked in a local-only repository by explicit per-project decision recorded
-in that project's `CLAUDE.md`; it never reaches a remote. Content containing
-personal data is processed by local models only; any cloud egress of such
-content requires an explicit, per-corpus, user-sanctioned exception recorded
-in the project's NEOCORTEX.
+in that project's instruction file (the rules file its harness loads); it
+never reaches a remote. Content containing personal data is processed by
+local models only; any cloud egress of such content requires an explicit,
+per-corpus, user-sanctioned exception recorded in the project's NEOCORTEX.
 
 **Art. 6 — Continuity Duty.** Every working session leaves its project
 resumable by a cold-start agent: the NEOCORTEX `STATUS` is current and within
 its size bound, the `JOURNAL` carries the session's decisions, the `MANIFEST`
-reflects reality. Archives are never deleted, and their existence is always
-declared where a cold agent will find it. **Everything is written for a dual
-audience**: code, comments, plans, status, journals, and logs must yield the
-same unambiguous, actionable truth to a human developer and to an AI agent,
-neither having prior conversation context. No idioms, no jargon shortcuts,
-no implicit references; prefer explicit paths, measurements, and formulas
-over vague descriptions. A text that needs its author present to be
-understood fails this article.
+reflects reality. Archives are never deleted without the user's explicit
+consent, recorded in the project's NEOCORTEX, naming the archive and the
+operation, and their existence is always declared where a cold agent will
+find it. **Everything is written for a dual audience**: code, comments,
+plans, status, journals, and logs must yield the same unambiguous, actionable
+truth to a human developer and to an AI agent, neither having prior
+conversation context. No idioms, no jargon shortcuts, no implicit references;
+prefer explicit paths, measurements, and formulas over vague descriptions. A
+text that needs its author present to be understood fails this article.
 
 **Art. 7 — Skill Mandate.** Every shared capability is discoverable through
 the generated skill index, usable through its declared interface without
@@ -122,7 +124,7 @@ recorded usage, not prophecy, calibrates it.
 **Art. 10 — Honest Reporting.** Outcomes are reported quantified and
 faithful: what worked with numbers, what failed with causes, what was skipped
 with reasons. Notifications follow the project's declared policy (single
-home: the project's `CLAUDE.md`) and are never retried on failure. No
+home: the project's instruction file) and are never retried on failure. No
 artifact may claim more than its evidence shows.
 
 **Art. 11 — Amendment Doctrine.** L0 is amended only in a dedicated
@@ -132,7 +134,7 @@ default), and a **logged `CONTRADICTION:` against L0 itself** (Art. 3). The
 review asks of each article: "does this still bind correctly under current
 conditions?" Incidents and lessons land in L1 (hooks, tests) or L2 (skills) —
 **never** as new L0 prose. Every amendment is a git commit. **L0 never
-exceeds 190 lines** (budget extended 2026-06-20 for the Independence Preamble; first amended 2026-06-10 with Amendment I); an amendment that grows it must shrink it elsewhere or amend this budget in the same ratification.
+exceeds 190 lines**; an amendment that grows it must shrink it elsewhere or amend this budget in the same ratification.
 
 **Art. 12 — Audit Reality.** Compliance is verified, not assumed: scheduled
 independent audits and periodic cold-start drills (a fresh agent, artifacts
@@ -170,7 +172,7 @@ resumable as it was found.
 ---
 
 ## Amendment I — Inviolability of Serving Artifacts
-*(Ratified 2026-06-10 after adversarial review; enforcement spec: `spec/NEOCORTEX_SPEC.md` §L1.)*
+*(Ratified 2026-06-10 after adversarial review; L1 reminder: the destructive-operation guardrail in `adapters/claude-code/hooks/prompt_guardrail.sh`.)*
 A *serving artifact* is a container, process, service, data volume, or endpoint that the user or
 real users currently rely on for production — identified by its role, not its runtime state
 (a crashed production container remains in scope; agent-spawned dev/test/ephemeral artifacts are
@@ -182,7 +184,7 @@ and viable and the rollback equally proven (for data: a test-restore, not a copy
 verify-then-destroy is the only lawful order. A failed production action is an INCIDENT (Art. 14):
 the pre-proven rollback may fire automatically; any new forward attempt requires a written state
 assessment and fresh consent. User-configured automation and recorded standing authorizations
-(explicit, scoped, written in the project's CLAUDE.md/NEOCORTEX) are valid consent for the class
-they name. EMERGENCY: an agent may HALT (never remove) a serving artifact that is itself actively
-failing or harming its host when consent cannot be obtained in time — preserving rollback state
-and declaring an INCIDENT immediately; stop ≠ rm.
+(explicit, scoped, written in the project's instruction file or NEOCORTEX) are valid consent for
+the class they name. EMERGENCY: an agent may HALT (never remove) a serving artifact that is itself
+actively failing or harming its host when consent cannot be obtained in time — preserving rollback
+state and declaring an INCIDENT immediately; stop ≠ rm.

@@ -13,9 +13,11 @@ So this regime governs **the work, not the worker** — and it declares independ
 three axes:
 
 - **Independence of vendor.** No lock to Anthropic, Google, OpenAI, Cursor, or whoever
-  ships next. The law is plain Python a git hook runs — un-bypassable wherever the work
-  meets a shared remote and CI — advisory and human-backed where none does — and beholden to no single tool's blessing anywhere. Per-vendor
-  in-loop hooks are conveniences layered on top, never the law.
+  ships next. The law is plain Python anyone can run by hand. This kit runs it as in-loop
+  hooks and manual gates; it becomes un-bypassable only where an adopter also runs it at a
+  shared remote (a server-side hook or CI, which this kit does not ship), and it stays
+  advisory and human-backed where none exists — beholden to no single tool's blessing anywhere.
+  Per-vendor in-loop hooks are conveniences layered on top, never the law.
 - **Independence of model.** The gate judges the *verdict*, not its author. The cheapest
   local model, the most capable frontier one, and a person at a terminal are weighed by
   the same schema. Routing advises; it does not own the truth.

@@ -136,7 +136,7 @@ def test_error_log_refuses_a_symlinked_log(ws):
 
 
 def test_seatA_f2_policy_data_and_local_settings_are_governed(ws):
-    (ws / "governance" / "machine_config.yaml").write_text('window: "02:40-03:10"\n')
+    (ws / "governance" / "machine_config.yaml").write_text('window: "12:00-12:30"\n')
     (ws / ".claude" / "settings.local.json").write_text("{}\n")
     hs(ws, "--write-approved")
     (ws / "governance" / "machine_config.yaml").write_text('window: "00:00-00:01"\n')

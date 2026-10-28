@@ -29,6 +29,9 @@ PATTERNS = {
     # --- identity / location ---
     "absolute-home-path":  r"/Users/|/home/[a-z]",
     "owner-name":          r"Dewost",
+    # The author's contact handle, private folder name and phone prefix are NOT listed here (2026-10-28, external
+    # review MED-2): a published scanner must not carry the strings it protects. They live in the untracked terms
+    # file with the codenames (see _codename_pattern below), which also feeds the identity and message checks.
     # Project-specific codenames are NOT hardcoded here. See _codename_pattern() below:
     # a published leak-scanner whose denylist contains the very strings it protects is
     # itself the leak, and this tool excludes its own file from scanning, so it could not
@@ -105,7 +108,14 @@ EXCEPTIONS = [
     ("governance/scripts/continuity_sweep.py", "local-database",
      '".md", ".py", ".json", ".sqlite", ".db", ".sh", ".js", ".ts", ".yaml",',
      "A list of file extensions the sweep recognises, not a database filename."),
+    # v0.13 (2026-10-27): a synthetic canary in a test proving that hostile files never leak their content.
+    ("adapters/claude-code/test_anchor_render.py", "generic-secret-assign", 'secret = "SECRET-' 'TOKEN-5f1c9d2e"',   # split so this table line is not itself a hit
+     "A made-up token the test plants and then asserts never appears in output. It opens nothing."),
 ]
+
+# Identity/message pattern classes that are public by declaration (2026-10-28): the author's name, as the copyright
+# holder named in LICENSE. Every other class found in a commit identity or message blocks.
+ID_ALLOWED_CLASSES = frozenset({"owner-name"})
 
 # The scanner's own path, repo-relative and EXACT. It is exempt from its PATTERNS (every
 # pattern is, by construction, an example of what it hunts) and from nothing else. Not by
@@ -227,8 +237,9 @@ def _codename_pattern(root: pathlib.Path):
                              lowercase form is ordinary vocabulary or a real identifier,
                              or the scan will rewrite/flag legitimate code
 
-    Absent file = generic patterns only, which is the correct default for an adopter: your
-    codenames are not ours. Keep the file untracked; .gitignore already lists it.
+    Absent file = generic patterns only, and main() then BLOCKS unless PUBLISH_SCAN_NO_PRIVATE_TERMS=1
+    says there are none (an adopter: your codenames are not ours). A mislaid file must not pass for an
+    empty one (external review, 2026-10-28, N-3). Keep the file untracked; .gitignore already lists it.
     """
     f = root / TERMS_FILE
     try:
@@ -490,6 +501,10 @@ def main() -> int:
     except Unreadable as e:
         print(f"BLOCKED — {e}")
         return 1
+    if not os.path.lexists(root / TERMS_FILE) and os.environ.get("PUBLISH_SCAN_NO_PRIVATE_TERMS") != "1":
+        print(f"BLOCKED — no {TERMS_FILE}: the private terms (codenames, contact handle) are not applied, so CLEAN would"
+              " prove nothing about them. Restore the file, or set PUBLISH_SCAN_NO_PRIVATE_TERMS=1 if you have none.")
+        return 1
     PATTERNS.update(extra)
     print(f"publish_scan: {len(extra)} project-codename pattern(s) loaded from "
           f"{TERMS_FILE}" if extra else
@@ -510,10 +525,27 @@ def main() -> int:
           f"{len(PATTERNS)} pattern(s), {len(EXCEPTIONS)} declared exception(s)")
     for f, p, _line, why in EXCEPTIONS:
         print(f"  allowed: {f} [{p}] — {why}")
-    # F9: commit AUTHOR/COMMITTER metadata is published too, and no content scan sees it.
-    ident = _git(root, "log", "--all", "--pretty=format:%an <%ae>%n%cn <%ce>")
+    # F9: commit AUTHOR/COMMITTER metadata is published too, and no content scan sees it. Same range as the history
+    # scan (N-4, 2026-10-28): HEAD by default, --all only with --full-history. With --all, a local restore branch or
+    # the old remote-tracking ref blocked the very push that rewrites them away.
+    rng = ["--all"] if full_history else ["HEAD"]
+    ident = _git(root, "log", *rng, "--pretty=format:%an <%ae>%n%cn <%ce>")
     idents = sorted({l.strip() for l in ident.splitlines() if l.strip()})
     id_hits = [(i, n) for i in idents for n, pat in PATTERNS.items() if re.search(pat, i)]
+    # 2026-10-28 (external review HIGH-1/MED-2): identity hits BLOCK, except the classes declared public here. The
+    # author's NAME is the declared copyright holder (see the LICENSE exception); any other identity hit blocks.
+    id_block = [(i, n) for i, n in id_hits if n not in ID_ALLOWED_CLASSES]
+    # Commit MESSAGES are published too and no tree scan reads them.
+    msgs = _git(root, "log", *rng, "--format=%H%x00%B%x1e")
+    msg_hits = []
+    for rec in msgs.split("\x1e"):
+        if "\x00" not in rec:
+            continue
+        sha, body = rec.strip("\n").split("\x00", 1)
+        for n, pat in PATTERNS.items():
+            m = re.search(pat, body)
+            if m and n not in ID_ALLOWED_CLASSES:
+                msg_hits.append((sha[:7], n, body[max(0, m.start() - 20):m.end() + 20].replace("\n", " ")))
     if idents:
         print(f"  commit identities in history: {len(idents)}")
         for i, n in id_hits:
@@ -533,6 +565,14 @@ def main() -> int:
         if len(hist) > 40:
             print(f"  … and {len(hist) - 40} more")
 
+    if id_block or msg_hits:
+        for i, n in id_block:
+            print(f"  BLOCKING identity [{n}] {i}")
+        for sha, n, snip in msg_hits:
+            print(f"  BLOCKING message {sha} [{n}] {snip}")
+        print("\nBLOCKED — commit identities or messages carry undeclared hits. Re-author or reword the commits"
+              " (a new candidate), or declare the class in ID_ALLOWED_CLASSES with a reason. Do not push.")
+        return 1
     if not findings and not hist:
         print("\nCLEAN — §4 gate passed. Safe to push.")
         return 0

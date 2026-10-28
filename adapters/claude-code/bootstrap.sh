@@ -83,20 +83,62 @@ done
 REPO="$(cd "$KIT/../.." && pwd)"
 if [[ -f "$REPO/_skills/build_index.py" ]]; then
   mkdir -p "$WORKSPACE/_skills"
-  [[ -e "$WORKSPACE/_skills/build_index.py" ]] || cp "$REPO/_skills/build_index.py" "$WORKSPACE/_skills/"
-  echo "  placed _skills/build_index.py        (C3 skill-version-drift gate)"
+  if [[ -e "$WORKSPACE/_skills/build_index.py" ]]; then
+    echo "  kept existing _skills/build_index.py (not replaced)"
+  else
+    cp "$REPO/_skills/build_index.py" "$WORKSPACE/_skills/"
+    echo "  placed _skills/build_index.py        (C3 skill-version-drift gate)"
+  fi
 fi
 if [[ -f "$REPO/governance/scripts/continuity_sweep.py" ]]; then
   mkdir -p "$WORKSPACE/governance/scripts"
-  [[ -e "$WORKSPACE/governance/scripts/continuity_sweep.py" ]] || \
+  if [[ -e "$WORKSPACE/governance/scripts/continuity_sweep.py" ]]; then
+    echo "  kept existing governance/scripts/continuity_sweep.py (not replaced)"
+  else
     cp "$REPO/governance/scripts/continuity_sweep.py" "$WORKSPACE/governance/scripts/"
-  echo "  placed governance/scripts/continuity_sweep.py  (closeout continuity advisory)"
+    echo "  placed governance/scripts/continuity_sweep.py  (closeout continuity advisory)"
+  fi
 fi
 if [[ -f "$REPO/governance/scripts/closeout_lint.py" ]]; then
   mkdir -p "$WORKSPACE/governance/scripts"
-  [[ -e "$WORKSPACE/governance/scripts/closeout_lint.py" ]] || \
+  if [[ -e "$WORKSPACE/governance/scripts/closeout_lint.py" ]]; then
+    echo "  kept existing governance/scripts/closeout_lint.py (not replaced)"
+  else
     cp "$REPO/governance/scripts/closeout_lint.py" "$WORKSPACE/governance/scripts/"
-  echo "  placed governance/scripts/closeout_lint.py     (closeout staleness advisory, M-9)"
+    echo "  placed governance/scripts/closeout_lint.py     (closeout staleness advisory, M-9)"
+  fi
+fi
+# The two scripts the shipped hooks run from the workspace's adapters/claude-code/ (v0.13, 2026-10-27):
+# prompt_guardrail.sh runs handoff_resolve.py on a `cold start` prompt, session_anchor.sh runs anchor_render.py at
+# session start. They belong to the hook set, so they are refreshed on every run, like the hooks above; without them
+# a cold start reports RESOLVER FAILED and the anchor falls back to its unrendered form.
+# (RT never takes a trailing slash in this file: the publish extraction rewrites that form to the repository's path.)
+RT="$WORKSPACE/governance/adapters/claude-code"
+mkdir -p "$RT"
+for s in handoff_resolve.py anchor_render.py; do
+  if [[ -f "$KIT/$s" ]]; then
+    cp "$KIT/$s" "$RT"
+    echo "  placed $s in $RT"
+  fi
+done
+# v0.13 r2 (2026-10-28, external review HIGH-5, MED-3): verify_advisory.py and stop_closeout_gate.py import the receipt
+# checker from the WORKSPACE's _skills/verify_gate/scripts, postedit_compile_gate.py runs the workspace's
+# governance/scripts/lint_dispatch_class.py, and the session anchor names the constitution at the workspace root.
+# Without these, VERIFY-GATE could never validate a receipt and the task-class lint stayed disabled for every adopter.
+if [[ -d "$REPO/_skills/verify_gate" ]]; then
+  mkdir -p "$WORKSPACE/_skills"
+  cp -R "$REPO/_skills/verify_gate" "$WORKSPACE/_skills"
+  echo "  placed _skills/verify_gate          (VERIFY-GATE receipt checker)"
+fi
+if [[ -f "$REPO/governance/scripts/lint_dispatch_class.py" ]]; then
+  mkdir -p "$WORKSPACE/governance/scripts"
+  cp "$REPO/governance/scripts/lint_dispatch_class.py" "$WORKSPACE/governance/scripts"
+  echo "  placed governance/scripts/lint_dispatch_class.py  (Art. 9 task-class lint)"
+fi
+L0_NAME="PAICodeConstitution-2026.md"
+if [[ -f "$REPO/$L0_NAME" && ! -e "$WORKSPACE/$L0_NAME" ]]; then
+  cp "$REPO/$L0_NAME" "$WORKSPACE"
+  echo "  placed $L0_NAME at the workspace root (the session anchor points at it)"
 fi
 
 # The APPROVED LIST (hooks batch 2, v0.10+): a hook sibling (verifier_recognizer, hook_support, loop_bound) runs only as
@@ -115,15 +157,17 @@ echo
 q() { printf '%q' "$1"; }
 echo "Next, in order — note --root: these tools do NOT infer the workspace you just named,"
 echo "and without it they search upward from their own location and may act on another tree:"
-echo "  1. bash $(q "$KIT/test_hooks.sh") --root $(q "$WORKSPACE")"
-echo "  2. $(q "$PY") $(q "$KIT/install_adapters.py") --root $(q "$WORKSPACE")            # DRY RUN"
-echo "  3. $(q "$PY") $(q "$KIT/install_adapters.py") --root $(q "$WORKSPACE") --apply    # arm the projects"
-echo "  4. $(q "$PY") $(q "$KIT/verify_fires.py") --root $(q "$WORKSPACE")                # PROVEN vs PENDING"
-echo "  5. after copying governance/*.yaml or changing any hook or settings file, re-approve:"
+echo "  1. copy the two config templates into $(q "$WORKSPACE/governance") (routing_policy.yaml, machine_config.yaml),"
+echo "     then re-approve (repeat after ANY change to a hook, a settings file or governance/*.yaml):"
 echo "     $(q "$PY") $(q "$DEST/hooks/hook_support.py") --write-approved"
+echo "  2. bash $(q "$KIT/test_hooks.sh") --root $(q "$WORKSPACE")                      # needs step 1"
+echo "  3. give each project its state first:  $(q "$PY") $(q "$KIT/neocortex_manifest.py") --init /path/to/project"
+echo "  4. $(q "$PY") $(q "$KIT/install_adapters.py") --root $(q "$WORKSPACE")            # DRY RUN"
+echo "     $(q "$PY") $(q "$KIT/install_adapters.py") --root $(q "$WORKSPACE") --apply    # arm the projects"
+echo "  5. $(q "$PY") $(q "$KIT/verify_fires.py") --root $(q "$WORKSPACE")                # PROVEN vs PENDING"
 echo
 echo "Or export it once:  export GOVERNANCE_WORKSPACE=$(q "$WORKSPACE")"
 echo
-echo "Step 4 matters more than it looks: 'installed' is not 'firing'. A project can sit"
+echo "Step 5 matters more than it looks: 'installed' is not 'firing'. A project can sit"
 echo "armed for months without a hook ever running. Until verify_fires.py prints PROVEN"
 echo "for a project, its enforcement is a plan, not a control."

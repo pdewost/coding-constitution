@@ -604,7 +604,7 @@ def _has_valid_receipt(edited_paths, changed_paths: list) -> bool:
 
 def _python312():
     """Resolve the provisioned interpreter. NEVER sys.executable: the interpreter running
-    hooks may be Xcode's 3.9.6 (workspace CLAUDE.md, Python interpreter discipline), which
+    hooks may be an older system Python (workspace CLAUDE.md, Python interpreter discipline), which
     fails the sweep spuriously. Return None (=> advisory skipped) if 3.12 is absent."""
     try:
         return shutil.which("python3.12") or (
@@ -795,7 +795,7 @@ def _skill_version_drift_inproc():
     frontmatter / title-line / metadata.json and `--strict` exits 1 — and it printed drift
     to stderr on EVERY run. But nothing consumed that output: the only automated caller
     (`skill_index_regen.py`) runs LENIENT by contract and always exits 0. So the warning
-    was real, correct, and unread, and `linkedin_scraper` sat split across FOUR sources
+    was real, correct, and unread, and `example_scraper` sat split across FOUR sources
     (frontmatter 2.3.0 / title v2.1 / metadata.json 2.2.0 / scripts/__init__.py 1.0.0)
     until 2026-07-28. An unread warning is not a gate; this is the missing consumer.
 
@@ -1244,16 +1244,17 @@ def main() -> None:
                 tid = blk.get("id")
                 failed = tid in error_tool_use_ids
                 name, ti = blk.get("name", ""), blk.get("input", {}) or {}
-                if name in ("Edit", "Write", "NotebookEdit"):
+                if name in ("Edit", "Write", "NotebookEdit", "MultiEdit"):   # A3 F-02: MultiEdit edits too
                     if failed:
                         continue   # the tool call itself failed — nothing was actually written
                     _wrote(str(ti.get("file_path") or ti.get("notebook_path") or ""), cwd)   # S4-44
                 elif name == "Bash":
                     cmd = str(ti.get("command", ""))
                     # M-13: a Bash command that WRITES a file counts like an Edit — unless the call
-                    # errored (tested decision, TestErroredToolCallNotCountedAsEdit). Known gap, not
-                    # touched here: a compound `cat > x.py <<EOF … && pytest` whose pytest fails
-                    # did write x.py, yet is skipped by that rule.
+                    # errored (tested decision, TestErroredToolCallNotCountedAsEdit). A3 F-02 / N32: when
+                    # an errored call contains a verifier, the writes in the segments BEFORE its first
+                    # verifier still count (`cat > x.py <<EOF … && pytest` whose pytest fails did write
+                    # x.py); segments from that verifier on may not have run, so they are not counted.
                     # Seat B B-16: writes are read PER SEGMENT (newlines split), and a write placed
                     # AFTER the last verifier of the command is re-armed after the clear below.
                     declared = _declared_commands(cwd, edited_since_verify[-5:])
@@ -1264,20 +1265,23 @@ def main() -> None:
                         # B3-06 (reviewer A round 3): a background launch's result is an acknowledgement, not the outcome
                         plain, plain_why = None, "run in the background (its outcome is not in this result)"
                     before_w, after_w = [], []
-                    if not failed:
+                    if not failed or runs:
                         try:
                             segs = _vr.segments_full(cmd) if _vr is not None else None
                         except ValueError:
                             segs = None
                         if segs:
                             last_idx = max((r["index"] for r in runs), default=-1)
+                            first_idx = min((r["index"] for r in runs), default=-1)
                             amap = {}                  # B5-18: assignments in ORDER, real statements only
                             for k, seg in enumerate(segs):
+                                if failed and k >= first_idx:
+                                    break              # N32: from the first verifier on, the errored call may not have run
                                 if _record_assignments(seg[2], amap):
                                     continue
                                 tw = _resolve_vars(_bash_write_targets(" ".join(seg[2])), cmd, amap)
                                 (after_w if runs and k > last_idx else before_w).extend(tw)
-                        else:
+                        elif not failed:
                             before_w = _resolve_vars(_bash_write_targets(cmd), cmd)
                     for fp in before_w:
                         _wrote(fp, cwd)

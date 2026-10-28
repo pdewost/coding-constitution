@@ -13,7 +13,7 @@ out=""
 case "$lower" in *plan\ *|*plan.*|plan*|*design*|*architect*|*sprint*|*roadmap*|*phase\ *|*"start "*)
   out="[Guardrail/plan] Budgets = task classes (routing_policy.yaml); ~4+ files or structural shift => PLAN before code (Art. 13). When the PLAN is drafted: PROPOSE an adversarial review BEFORE validation, with reasons specific to this plan (omissions vs predecessor artifacts, contradictions, unenforceable mandates, unnamed deliverables) — NEOCORTEX_SPEC §3 gate. If the running model@effort differs from the sprint's declared budget: emit the one-line ROUTING ADVISORY (escalation => await go; downshift or user-ruling => surface + proceed) BEFORE the first tool action — routing_policy deviation_advisory." ;;
 esac
-case "$lower" in *delete*|*remove*|*erase*|*drop\ *|*migrate*|*"rm "*|*apply*|*destructive*)
+case "$lower" in *delete*|*remove*|*erase*|*drop\ *|*migrate*|*"rm "*|*apply*|*destructive*|*wipe*|*destroy*|*purge*|*truncate*)   # N29: last four, A2 4b-4
   out="${out:+$out
 }[Guardrail/destructive] Dry-run default + explicit apply gate (Art. 4); never delegate destructive ops (Art. 8); AMENDMENT I: no stop/rm/replace of a serving artifact without consent naming it — one consent = ONE operation, verify-then-destroy (replacement proven BEFORE rm), failed prod action = INCIDENT, never retry; check project invariants (NEOCORTEX/STATUS.md) and machine_config.yaml forbidden windows first." ;;
 esac
@@ -33,4 +33,36 @@ if [ -z "$out" ]; then
   esac
 fi
 printf '%s\n' "$out"
+# >>> cold-start handoff (PLAN_cold_start_handoff_harmonization_2026-10-26.md §3, §10). On the prompt `cold start` (also
+# `cold-start`, `coldstart`, or one of them + ONE role), handoff_resolve.py prints the open handoff of this folder's role(s),
+# a choice when several roles are open, or why there is none. Every other prompt pays one `case` test; nothing above
+# this marker is changed (D4: the hook minus this block is byte-identical to the live base). The resolver's own prompt
+# test is authoritative; this shell filter only avoids starting Python for prompts that cannot be a trigger.
+case "$lower" in *cold*start*)
+  _cs_n=$(printf '%s' "$lower" | tr -s '[:space:]' ' ' | sed -e 's/^ //' -e 's/ $//' -e 's/[.!]$//')
+  case "$_cs_n" in "cold start"|"cold-start"|"coldstart"|"cold start "*|"cold-start "*|"coldstart "*)
+    _cs_root="$(cd "$(dirname "$0")/../.." && pwd)"
+    # Interpreter chain of session_anchor.sh: first reachable python3.12 wins, bare python3 is the last resort.
+    _cs_py=""
+    for _c in python3.12 /usr/local/bin/python3.12 /opt/homebrew/bin/python3.12 python3; do
+      if command -v "$_c" >/dev/null 2>&1; then _cs_py="$_c"; break; fi
+    done
+    [ -n "$GUARDRAIL_PY_BIN" ] && _cs_py="$GUARDRAIL_PY_BIN"   # test-harness escape hatch (as ANCHOR_PY_BIN)
+    _cs_res="${_cs_root}/governance/adapters/claude-code/handoff_resolve.py"
+    _cs_out=""; _cs_rc=127
+    if [ -f "$_cs_res" ] && [ ! -L "$_cs_res" ]; then
+      _cs_out="$(_CS_PROMPT="$p" "$_cs_py" -I "$_cs_res" hook --root "$_cs_root" --cwd "$PWD")"; _cs_rc=$?
+    fi
+    # Printed only on rc 0 under the "[Cold start]" header (python exits 2 when it cannot open a script: header check, as
+    # the anchor does). rc 0 with no output = not a trigger. Anything else is loud on a bare trigger, silent otherwise.
+    case "${_cs_rc}:${_cs_out}" in
+      "0:[Cold start]"*) printf '%s\n' "$_cs_out" ;;
+      "0:") ;;
+      *) case "$_cs_n" in "cold start"|"cold-start"|"coldstart")
+           echo "[Cold start] RESOLVER FAILED (rc=${_cs_rc}): no handoff was injected. Run: python3.12 ${_cs_root}/governance/adapters/claude-code/handoff_resolve.py resolve --cwd \"\$PWD\" and tell the founder the cold-start hook failed." ;;
+         esac ;;
+    esac ;;
+  esac ;;
+esac
+# <<< cold-start handoff
 exit 0

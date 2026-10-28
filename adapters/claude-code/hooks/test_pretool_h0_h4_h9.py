@@ -83,7 +83,7 @@ def guard(ws, cmd=None, raw=None, transcript=None, tool="Bash"):
 GOVERNOR_WRITES = [
     "echo '{}' > .claude/settings.json",
     "cat new.json > {ws}/.claude/settings.local.json",
-    "sed -i '' 's/22:30/00:00/' governance/machine_config.yaml",           # S4-22
+    "sed -i '' 's/12:00/00:00/' governance/machine_config.yaml",           # S4-22
     "perl -pi -e 's/a/b/' governance/machine_config.yaml",
     "echo x >> governance/routing_policy.yaml",
     "sudo tee governance/hooks_approved.sha256 < /tmp/h",
@@ -364,7 +364,7 @@ def test_seatA_f1_self_approval_of_the_hash_list_asks(ws):
 
 
 def test_seatA_f5_osascript_do_shell_script_is_governed(ws):
-    script = 'do shell script "sed -i \'\' \'s/02:40/00:00/\' governance/machine_config.yaml"'
+    script = 'do shell script "sed -i \'\' \'s/12:00/00:00/\' governance/machine_config.yaml"'
     raw = json.dumps({"tool_name": "mcp__Control_your_Mac__osascript", "tool_input": {"script": script}, "cwd": str(ws)})
     d, why = guard(ws, raw=raw)
     assert d == "ask" and "GOVERNOR" in why

@@ -18,11 +18,11 @@ guarantee and keeps this side-effecting step independently reviewable / disable-
 INVARIANTS this hook holds:
   * NEVER blocks. It is a convenience side-effect, not a policy gate — always exits 0, even on
     regen failure (a broken build_index.py must not wedge the agent's turn; the failure is
-    logged, and the pre-existing index simply stays as-is).
+    logged, and the pre-existing index stays, marked STALE on its first line: N26, below).
   * LENIENT regen (no --strict): a live version split (the C3 guard's target) must still let
     the index be rewritten, not refuse. --strict is for the founder's manual/CI gate, not here.
   * No shell. `build_index.py`'s path is an argv element; the interpreter is resolved to the
-    provisioned python3.12 (workspace rule: never bare python3 → Xcode 3.9.6).
+    provisioned python3.12 (workspace rule: never bare python3 → an older system Python).
   * Idempotent + bounded. build_index.py is deterministic and greps a bounded tree; a short
     timeout caps the turn cost.
 
@@ -39,6 +39,7 @@ import datetime
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -47,7 +48,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 SKILLS_DIR = ROOT / "_skills"
 BUILD_INDEX = SKILLS_DIR / "build_index.py"
+INDEX_MD = SKILLS_DIR / "SKILLS_INDEX.md"
 _LOG = (".claude", "hooks", ".skill_index_regen.log")
+_MARK = b"> **STALE INDEX**"
 
 
 def _log(msg: str) -> None:
@@ -77,6 +80,44 @@ def _is_skill_manifest(fp: str) -> bool:
     return p.name == name and p.parent.parent == skills and p.parent != skills
 
 
+def _mark_stale(fp: str, why: str) -> None:
+    """N26 (2026-10-27, B2 F15): a failed regen used to leave the previous SKILLS_INDEX.md with nothing to say it was
+    stale, and the session anchor injects its first 40 lines as current. Put ONE marker line on top (an older marker is
+    replaced, never stacked); the next successful regen rewrites the file and the marker goes with it. The new text is
+    written to a temp file and renamed over the index, so nothing is written through a planted link; an index that is
+    absent, not a regular file or hardlinked is left as it is (the anchor does not show such an index)."""
+    tmp = None
+    try:
+        with os.fdopen(os.open(INDEX_MD, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as fh:
+            st = os.fstat(fh.fileno())
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_size > 1_000_000:
+                _log("MARK skipped: the index is not a single-link regular file")
+                return
+            body = fh.read()
+        if body.startswith(_MARK):
+            body = body.split(b"\n", 1)[1] if b"\n" in body else b""
+        what = " ".join(f"{os.path.basename(os.path.dirname(fp))}/{os.path.basename(fp)}".split())[:80]
+        line = (f"{_MARK.decode()} regen failed {datetime.datetime.now().isoformat(timespec='seconds')} after an edit of "
+                f"{what} ({why}): the entries below may be out of date. Fix it, then run "
+                f"`python3.12 _skills/build_index.py`.\n").encode("utf-8")
+        tmp = SKILLS_DIR / f".SKILLS_INDEX.md.n26.{os.getpid()}"
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, stat.S_IMODE(st.st_mode)),
+                       "wb") as out:
+            os.fchmod(out.fileno(), stat.S_IMODE(st.st_mode))      # the umask must not narrow the index's mode
+            out.write(line + body)
+        os.replace(tmp, INDEX_MD)
+        tmp = None
+        _log(f"MARK stale index ({why})")
+    except Exception as e:   # marking is best-effort too: it must not wedge the turn
+        _log(f"MARK failed {e!r}")
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
 def main() -> None:
     try:
         data = json.load(sys.stdin)
@@ -87,11 +128,13 @@ def main() -> None:
         sys.exit(0)   # not a skill manifest edit → no regen
     if not BUILD_INDEX.is_file():
         _log(f"SKIP build_index.py missing (edited {fp})")
+        _mark_stale(fp, "build_index.py missing")
         sys.exit(0)
 
     py = shutil.which("python3.12") or shutil.which("python3") or ""
     if not py:
         _log("SKIP no python interpreter found")
+        _mark_stale(fp, "no python interpreter")
         sys.exit(0)
     try:
         # Lenient (no --strict); argv list (no shell); build_index.py writes index.json +
@@ -103,10 +146,13 @@ def main() -> None:
                  f"{os.path.basename(fp)}")
         else:
             _log(f"REGEN nonzero rc={r.returncode}: {(r.stderr or r.stdout or '')[-300:]}")
+            _mark_stale(fp, f"rc={r.returncode}")
     except subprocess.TimeoutExpired:
         _log("REGEN timeout")
+        _mark_stale(fp, "timeout")
     except Exception as e:   # never let a regen failure wedge the turn
         _log(f"REGEN error {e!r}")
+        _mark_stale(fp, f"error {type(e).__name__}")
     sys.exit(0)   # convenience side-effect: ALWAYS succeed, never block
 
 

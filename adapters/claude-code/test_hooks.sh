@@ -1,7 +1,7 @@
 #!/bin/bash
 # test_hooks.sh — fire/no-fire matrix for every Claude Code L1 hook
 # (POLICY_CORE.md self-test duty, Constitution Art. 12). Run standalone or
-# from the monthly audit. Exit 0 = all green; non-zero = failures listed.
+# from a scheduled job of your own. Exit 0 = all green; non-zero = failures listed.
 # Workspace root = nearest ancestor holding BOTH .claude/settings.json and .claude/hooks/.
 # Was a fixed "../../..", correct only for the private tree's layout; in the published kit
 # (one level shallower) $H pointed at a directory that did not exist and 13 of 23 cases
@@ -80,9 +80,23 @@ check "L0 read allowed"              silent "$(j "cat $L0" | "$H/pretool_guard.p
 check "L0 read-into-copy allowed"    silent "$(j "cat $L0 > /tmp/copy.md" | "$H/pretool_guard.py")"
 check "normal rm is silent"       silent "$(j 'rm /tmp/scratch.txt' | "$H/pretool_guard.py")"
 check "normal command silent"     silent "$(j 'ls -la' | "$H/pretool_guard.py")"
-# DENY-WINDOW is time-dependent: assert correct behavior for the current clock.
-hm=$((10#$(date +%H%M)))
-if [ $hm -ge 2230 ] || [ $hm -lt 240 ]; then expect_w=fire; else expect_w=silent; fi
+# DENY-WINDOW is time-dependent: assert correct behavior for the current clock. The guard reads every
+# `window: "HH:MM-HH:MM"` line of <root>/governance/machine_config.yaml and ASKS when that file cannot be read; the
+# expectation follows the same rules (2026-10-28: it used to hard-code one machine's window, which failed every night
+# for an adopter whose config has another window or a placeholder).
+MC="$ROOT/governance/machine_config.yaml"
+expect_w=silent
+if [ ! -r "$MC" ]; then
+  expect_w=fire
+else
+  hm=$((10#$(date +%H%M)))
+  while IFS= read -r w; do
+    ws=$((10#${w:0:2}${w:3:2})); we=$((10#${w:6:2}${w:9:2}))
+    if [ $ws -gt $we ]; then
+      if [ $hm -ge $ws ] || [ $hm -lt $we ]; then expect_w=fire; fi
+    elif [ $hm -ge $ws ] && [ $hm -lt $we ]; then expect_w=fire; fi
+  done < <(grep -oE 'window:[[:space:]]*"[0-9]{2}:[0-9]{2}-[0-9]{2}:[0-9]{2}"' "$MC" | grep -oE '[0-9]{2}:[0-9]{2}-[0-9]{2}:[0-9]{2}')
+fi
 check "extraction vs window (now)" $expect_w "$(j 'python3 unified_extractor.py --full' | "$H/pretool_guard.py")"
 
 echo "── postedit_compile_gate (COMPILE-GATE) ──"
@@ -127,7 +141,10 @@ if [ ! -e "$ROOT/governance/OPEN_WORK.md" ]; then
   printf '| Item | Where | Status |\n|---|---|---|\n| smoke-test fixture item | here | READY |\n' > "$ROOT/governance/OPEN_WORK.md"
   _ANCHOR_OW_SEEDED=1
 fi
-a=$("$H/session_anchor.sh"); check "session_anchor emits"  fire "$a"
+# Run from $ROOT (PLAN_cold_start v0.3 S2, 2026-10-26): the OPEN_WORK digest is now printed only at the workspace
+# root and in governance/, so the assertion below on 'Open fleet work' held only when this script happened to be
+# launched from one of those two places. The cwd is now pinned instead of inherited.
+a=$(cd "$ROOT" && "$H/session_anchor.sh"); check "session_anchor emits"  fire "$a"
 [ "$(printf '%s' "$a" | wc -l)" -lt 60 ] && { pass=$((pass+1)); echo "PASS  anchor bounded (<60 lines)"; } || { fail=$((fail+1)); echo "FAIL  anchor exceeds 60 lines"; }
 # --- interpreter resolution (2026-08-27). `session_anchor.sh` used bare `python3` at four sites,
 # the PATH-dependent hazard machine_config.yaml names. It is now resolved once via a fallback chain.
@@ -136,7 +153,7 @@ a=$("$H/session_anchor.sh"); check "session_anchor emits"  fire "$a"
 # that ONLY Python can produce, and the negative case proves that section is the discriminator.
 check "anchor: python-produced section present"  fire   "$(printf '%s' "$a" | grep -F 'Open fleet work')"
 check "anchor: skill rows present"               fire   "$(printf '%s' "$a" | grep -F '| library |')"
-bad=$(ANCHOR_PY_BIN=/nonexistent/python "$H/session_anchor.sh" 2>/dev/null)
+bad=$(cd "$ROOT" && ANCHOR_PY_BIN=/nonexistent/python "$H/session_anchor.sh" 2>/dev/null)
 check "anchor: broken interpreter LOSES that section" silent "$(printf '%s' "$bad" | grep -F 'Open fleet work')"
 [ "$_ANCHOR_IDX_SEEDED" = 1 ] && rm -f "$ROOT/_skills/SKILLS_INDEX.md"
 [ "$_ANCHOR_OW_SEEDED" = 1 ] && rm -f "$ROOT/governance/OPEN_WORK.md"

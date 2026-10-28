@@ -308,6 +308,28 @@ ARCHIVE_MV_OUT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# N29 / A2 F-03 (2026-10-26): a library call from an interpreter. `python3 -c "import shutil; shutil.rmtree('NEOCORTEX/
+# _archive')"` matched none of the patterns above, which start from a shell verb. Each form lies in one shell segment:
+# (a) a deleting call whose argument names the archive (shutil.rmtree, os.remove/unlink/rmdir/removedirs, send2trash,
+#     Node fs.rmSync & co, Ruby File.delete / FileUtils.rm*, Perl unlink/rmtree/remove_tree), or a move call whose
+#     FIRST argument does (shutil.move, os.rename/replace/renames; moving INTO the archive stays allowed);
+# (b) the archive is the object deleted or moved (`Path(".../_archive/x").unlink()`, `.rmdir()`, `.rename(`);
+# (c) a subprocess that runs rm (`run(["rm", "-rf", <archive>])`, `os.system("rm -rf <archive>")`).
+# Same text-only limit as the rest: a path held in a variable (`p = "_archive"; shutil.rmtree(p)`) still passes.
+_DEL_DOTTED = (r"\b(?:shutil\.rmtree|os\.(?:remove|unlink|rmdir|removedirs)|send2trash|fs(?:\.promises)?\.(?:rm|unlink|rmdir)"
+               r"|File\.(?:delete|unlink)|FileUtils\.(?:rm|rm_r|rm_rf|rm_f|remove|remove_dir|remove_entry|rmtree)"
+               r"|rmSync|unlinkSync|rmdirSync)\s*\(")
+_DEL_BARE = r"(?<![\w.$-])(?:unlink|rmtree|remove_tree)(?:\s*\(|\s+['\"])"      # Perl: `unlink "x"` needs no parens
+_RM_WORD = r"(?:/bin/)?(?:rm|rmdir|unlink|shred|trash|srm)"
+ARCHIVE_INTERP_RE = re.compile(
+    r"(?:" + _DEL_DOTTED + r"|" + _DEL_BARE + r")[^;&|\n]*?" + _ARCH                              # (a) delete
+    + r"|\b(?:shutil\.move|os\.(?:rename|replace|renames))\s*\(\s*[^,;&|\n]*?" + _ARCH            # (a) move out
+    + r"|" + _ARCH + r"[^;&|\n]*?\)\s*\.\s*(?:unlink|rmdir|rmtree|rename|replace)\s*\("          # (b)
+    + r"|\[\s*['\"]" + _RM_WORD + r"['\"]\s*,[^\]\n]*?" + _ARCH                                   # (c) argv list
+    + r"|\(\s*['\"]\s*(?:sudo\s+)?" + _RM_WORD + r"\s[^'\"\n]*?" + _ARCH,                         # (c) shell string
+    re.IGNORECASE,
+)
+
 # P0.0a -- L0 WRITE-GUARD (PLAN_lifecycle_routing_evolution_2026-08-24.md).
 # The three regexes above cover DELETION and move-OUT. They do NOT cover OVERWRITE, which is
 # the form the L0 invariant actually fears: "never edited mid-session without founder consent".
@@ -437,7 +459,8 @@ def _bounded_search(regexes, text: str, token_rx, quote_aware: bool = False) -> 
     return None, complete
 
 
-_ARCHIVE_RES = (ARCHIVE_RM_RE, ARCHIVE_FIND_RE, ARCHIVE_MV_OUT_RE, ARCHIVE_CD_RM_RE, ARCHIVE_SYNC_CLEAN_RE)
+_ARCHIVE_RES = (ARCHIVE_RM_RE, ARCHIVE_FIND_RE, ARCHIVE_MV_OUT_RE, ARCHIVE_CD_RM_RE, ARCHIVE_SYNC_CLEAN_RE,
+                ARCHIVE_INTERP_RE)
 _ARCH_TOK_RE = re.compile(r"_archive|antigravity-2025\.md|paicodeconstitution-2026\.md", re.IGNORECASE)
 _DESTROY = {"rm", "rmdir", "unlink", "shred", "trash", "srm"}
 _ARCH_SKIP_DIRS = {"node_modules", ".git", ".venv", "venv", "__pycache__", ".pytest_cache", "dist", "build", ".cache",
@@ -982,7 +1005,11 @@ _ALL_REDIRECTS = _W_REDIRECTS + ("<", "<<", "<<<", ">&", "<&")
 
 
 # B2-07 (reviewer A round 2b): `/bin/bash <<EOF`, `bash --noprofile <<EOF`, `bash -s -- <<EOF` run their body too.
-_SHELL_FED_RE = re.compile(r"(?:^|[;&|(]\s*|\s)(?:[^\s;&|()<>]*/)?(?:bash|sh|zsh|dash|ksh)(?:\s+-{1,2}[A-Za-z-]*)*\s*<<")
+# A3 F-01 (Gemini 4 Argon, Constitution review r3; verified on the live hook 2026-10-26): an option VALUE
+# (`bash -o pipefail <<EOF`, `--rcfile x`, `-O extglob`) broke the match, so the body was stripped and an L0 or
+# governor write inside it went through silently. Any <=12 non-metachar words may now sit between the shell and
+# `<<` (bounded: the unbounded form took 7.5 s on a 48 KB line against the hook's 10 s timeout).
+_SHELL_FED_RE = re.compile(r"(?:^|[;&|(]\s*|\s)(?:[^\s;&|()<>]*/)?(?:bash|sh|zsh|dash|ksh)(?:\s+[^\s;&|()<>]+){0,12}\s*<<")
 
 
 def _heredoc_word(line: str, i: int):
@@ -2212,7 +2239,7 @@ def _deny_checks(cmd: str, cwd: str) -> None:
             "Approve only if no forbidden window applies now.")
     if window:
         deny(f"DENY-WINDOW (machine_config.yaml): extraction/vectorization is "
-             f"forbidden during {window} (02:40 LaunchAgent collision). Defer or "
+             f"forbidden during {window}. Defer or "
              f"ask the user to override manually.")
 
 
