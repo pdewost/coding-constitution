@@ -6,12 +6,13 @@ Derives the canonical hooks block — and the restrictive half (deny, ask) of th
 permissions block — from the workspace-root .claude/settings.json (the single policy
 source), then writes / checks <project>/.claude/settings.json
 for every MIGRATED project (a dir containing NEOCORTEX/ within maxdepth 3 of
-the workspace root). Enforcement follows migration: unmigrated BRAIN-only
+the workspace root; the root itself, when it is also a project, is the policy source and is
+never rewritten, only listed in INSTALLED.json). Enforcement follows migration: unmigrated BRAIN-only
 projects are NOT armed until they migrate (NEOCORTEX_SPEC §5).
 
 Modes:
   (default / --dry-run)  Print a unified diff per project; write nothing.
-  --apply                Write all adapters; update INSTALLED.json manifest.
+  --apply                Write all adapters (never the canonical root's); update INSTALLED.json manifest.
   --check                Compare each installed adapter against the canonical source;
                          exit nonzero + list any drifted or missing project.
 
@@ -507,6 +508,44 @@ def _extra_target_status(rel: str) -> tuple[pathlib.Path, str | None]:
     return path, None
 
 
+def _is_canonical(proj: pathlib.Path) -> bool:
+    """True when `proj` IS the workspace root (also a symlink that points back at it). The root's
+    .claude/settings.json is CANONICAL_SETTINGS, the file the policy is read from: it is never
+    rewritten, whatever else lives there (v0.13.2, C1)."""
+    return proj.resolve() == ROOT.resolve()
+
+
+def _canonical_notice_text() -> str:
+    import shlex
+    return (NOTICE_CANONICAL_ABSOLUTE + "(cd " + shlex.quote(str(ROOT)) + " && python3.12 .claude/hooks/hook_support.py --write-approved)")
+
+
+NOTICE_CANONICAL_ABSOLUTE = (
+    "NOTICE: the hook commands in .claude/settings.json at the workspace root name absolute paths to "
+    ".claude/hooks/ instead of $CLAUDE_PROJECT_DIR. If you did not write these paths yourself, an earlier "
+    "installer rewrote this file: compare it with adapters/claude-code/settings.canonical.json, copy over "
+    "what you have not customised, then run: "
+)
+
+
+def _canonical_has_absolute_hook_paths() -> bool:
+    """C4 detector: a hook command in the canonical root that names an absolute path to a
+    .claude/hooks/ folder and does not contain CLAUDE_PROJECT_DIR."""
+    import re
+    for entries in _load_canonical().values():
+        for entry in entries:
+            for hook in entry.get("hooks", []):
+                cmd = hook.get("command") or ""
+                if "CLAUDE_PROJECT_DIR" not in cmd and re.search(r"""(?:^|[\s'"])/[^\n]*?\.claude/hooks['"]?/""", cmd):
+                    return True
+    return False
+
+
+def _print_canonical_notice():
+    if _canonical_has_absolute_hook_paths():
+        print(_canonical_notice_text() + "\n")
+
+
 def _targets() -> tuple[list[pathlib.Path], list[tuple[str, str]]]:
     """(armed targets = migrated projects + accepted extras, refused extras as (rel, reason))."""
     projects = _discover_projects()
@@ -517,7 +556,18 @@ def _targets() -> tuple[list[pathlib.Path], list[tuple[str, str]]]:
             refused.append((rel, reason))
         elif path not in projects:
             projects.append(path)
-    return sorted(projects), refused
+    # One file, one row: de-duplicate by resolved path. The canonical root is always carried as the
+    # resolved ROOT, even when it was reached through a child symlink that points back at it. Among
+    # other paths to one folder the real one is kept: the O_NOFOLLOW walk refuses an alias, so keeping
+    # an alias would leave the project unarmed.
+    unique: dict = {}
+    for path in sorted(projects):
+        key = path.resolve()
+        if key == ROOT.resolve():
+            unique[key] = key
+        elif key not in unique or path == key:
+            unique[key] = path
+    return sorted(unique.values()), refused
 
 
 # The arming manifest goes through the SAME symlink/hardlink/FIFO-safe helpers as every adapter
@@ -531,6 +581,20 @@ def _read_installed() -> list[dict]:
 def _write_installed(records: list[dict]):
     _safe_confined_write(ROOT, INSTALLED_JSON.parent, INSTALLED_JSON.name,
                          (json.dumps(records, indent=2) + "\n").encode("utf-8"))
+
+
+def _canonical_row_current(policy_hash: str) -> bool:
+    """True when INSTALLED.json holds the canonical root's row with this policy hash. Unreadable or
+    malformed counts as absent (the file is then rewritten, never aborting the run)."""
+    try:
+        rows = _read_installed()
+    except (OSError, ValueError):
+        return False
+    if not isinstance(rows, list):
+        return False
+    root = str(ROOT.resolve())
+    return any(isinstance(r, dict) and r.get("project_path") == root
+               and r.get("policy_source_hash") == policy_hash for r in rows)
 
 
 def _now_iso() -> str:
@@ -552,6 +616,7 @@ def _make_record(project: pathlib.Path, has_adapter: bool,
 
 def _mode_dry_run_or_apply(apply: bool) -> int:
     desired_content, policy_hash, _, _ = _desired()
+    _print_canonical_notice()
 
     projects, refused = _targets()
     print(f"Discovered {len(projects)} target(s) (projects with state dirs + extra targets).\n")
@@ -561,6 +626,7 @@ def _mode_dry_run_or_apply(apply: bool) -> int:
     records: list[dict] = []
     changed = 0
     unchanged = 0
+    canonical_n = 0
 
     for proj in projects:
         adapter_path = proj / ".claude" / "settings.json"
@@ -592,6 +658,13 @@ def _mode_dry_run_or_apply(apply: bool) -> int:
         except OSError as e:
             print(f"  SKIP (unsafe path)  {proj.relative_to(ROOT)} — "
                   f"symlink/unsafe component in path on read; refusing to touch ({e}).")
+            continue
+
+        if _is_canonical(proj):
+            # C1: the canonical source is never written, in apply or dry run.
+            canonical_n += 1
+            print(f"  CANONICAL (not rewritten)  {proj.relative_to(ROOT)}")
+            records.append(_make_record(proj, True, policy_hash, "canonical-source"))
             continue
 
         if existing is not None and existing == desired_content:
@@ -643,16 +716,19 @@ def _mode_dry_run_or_apply(apply: bool) -> int:
 
         records.append(_make_record(proj, apply, policy_hash, action))
 
+    canon_txt = f", {canonical_n} canonical (not rewritten)" if canonical_n else ""
     if apply:
-        if changed > 0:
+        # C2: the canonical root changes no file, but its row must still reach INSTALLED.json.
+        need_installed = changed > 0 or (canonical_n > 0 and not _canonical_row_current(policy_hash))
+        if need_installed:
             _write_installed(records)
             print(f"\nINSTALLED.json updated ({len(records)} entries).")
         else:
             # Nothing changed — preserve existing INSTALLED.json timestamps
-            print(f"\nNo-op: all {unchanged} project(s) already current. "
+            print(f"\nNo-op: all {unchanged} project(s) already current{canon_txt}. "
                   f"INSTALLED.json unchanged.")
     else:
-        print(f"\nDry-run summary: {changed} would change, {unchanged} already current.")
+        print(f"\nDry-run summary: {changed} would change, {unchanged} already current{canon_txt}.")
         print("Pass --apply to write.")
 
     return 0
@@ -661,6 +737,7 @@ def _mode_dry_run_or_apply(apply: bool) -> int:
 def _mode_check() -> int:
     """Drift-check: compare each installed adapter to the canonical source."""
     desired_content, policy_hash, abs_hooks, abs_perms = _desired()
+    _print_canonical_notice()
 
     lint_problems = _lint_hook_commands(abs_hooks) + _lint_permissions(abs_perms)
     for prob in lint_problems:
@@ -710,7 +787,10 @@ def _mode_check() -> int:
         if existing is None:
             missing.append(rel)
             continue
-        if existing == desired_content:
+        if _is_canonical(proj):
+            # C3: the canonical source is not compared with the absolute-path form it must not have.
+            clean.append(rel)
+        elif existing == desired_content:
             clean.append(rel)
         else:
             drifted.append(rel)

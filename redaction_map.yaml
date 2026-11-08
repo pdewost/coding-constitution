@@ -15,7 +15,7 @@
 
 version: 1
 extracted: 2026-08-25
-re_extracted: 2026-11-08   # v0.13.1 (first extraction 2026-11-07): R40b added (s220 F6). v0.13 r6 (2026-10-29): R45, R45b added (r5: R44; r4, 2026-10-28: R5 changed; R29-R43b added; 14 files added to the allowlist)
+re_extracted: 2026-11-08   # v0.13.2: no new rule, one more historical_exposure entry; test_install_adapters_canonical_root.py added to the allowlist. v0.13.1 (first extraction 2026-11-07): R40b added (s220 F6). v0.13 r6 (2026-10-29): R45, R45b added (r5: R44; r4, 2026-10-28: R5 changed; R29-R43b added; 14 files added to the allowlist)
 source: "a private multi-project workspace (not published)"
 method: "clean-room allowlist extraction; see PROTOCOL_publish_regime §1/§5 in the private tree"
 gate: "publish_scan.py — the §4 pre-publish scan, as code; exit 0 required before any push"
@@ -356,6 +356,8 @@ historical_exposure:   # re-audited 2026-10-29 over every commit reachable from 
   - what: "the author's clone-folder name (the R21 class) in a hook, a hook test and a policy row"
     status: "PUBLISHED in fee48bc only (introduced there; replaced by R21 from 75c6116, v0.12, 2026-10-08). History
              keeps it. The account handle inside it is already public in README's clone URL. (Declared 2026-11-08, s220 F14.)"
+  - what: "the author's forbidden window and a scheduled job's run time, given as a worked example in docs/operational-safety.md and ANTIGRAVITY.md"
+    status: "PUBLISHED in the range 405b073~1..836f741; absent from the current tree. History keeps them. This map names the files without the values. (Declared 2026-11-08.)"
   - what: "the owner's account name, lower case, in README's clone URL"
     status: "INTENTIONAL — it is this repository's own address. publish_scan's owner-name class is case-sensitive and
              does not match it; case-folding that class (with this URL and the no-reply identity as exceptions) is

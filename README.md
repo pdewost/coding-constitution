@@ -193,9 +193,9 @@ a project:
 - **A single project.** Run `bootstrap.sh` pointed at that project's own root; its hooks are
   live directly there. Then still run `install_adapters.py --root <project> --apply`: discovery
   includes the root itself when it holds `NEOCORTEX/`, and `verify_fires.py` needs the
-  `INSTALLED.json` that `--apply` writes. That run also rewrites the root's own `.claude/settings.json`, a
-  governed file, so the tamper check reports it modified (in full once per session, then as one short line) until
-  you re-approve once: `python3.12 .claude/hooks/hook_support.py --write-approved` (run at the project root). One known limit: `cold start` at a lone project's root
+  `INSTALLED.json` that `--apply` writes. Since v0.13.2 that run leaves the root's own `.claude/settings.json` as it
+  is; if an earlier version rewrote it with absolute paths, the installer prints a notice with the steps to restore it.
+  One known limit: `cold start` at a lone project's root
   does not yet find that project's handoff (the resolver looks for a `governance/` project there).
 - **Several projects sharing one policy.** Run `bootstrap.sh` once at a root that *contains*
   your project directories as children (the root need not be a project itself — this repo's
@@ -304,16 +304,20 @@ bash adapters/claude-code/test_hooks.sh --root /path/to/your/workspace
 #    NEOCORTEX/, so a project without one is not armed.
 #    --init originates a NEOCORTEX/ for a project that has none (the usual case);
 #    --regenerate only rebuilds files[] inside one that already exists.
+#    If the project's repo has a remote, keep its state and generated files out of it (several hold your absolute path):
+printf '\n%s\n' NEOCORTEX/ .claude/settings.json >> /path/to/project/.gitignore
+#    If that project is also the workspace root (the single-project layout), these too:
+printf '%s\n' governance/adapters/INSTALLED.json 'governance/*.log' governance/machine_config.yaml governance/.h4c_seen.json >> /path/to/project/.gitignore
 python3.12 adapters/claude-code/neocortex_manifest.py --init       /path/to/project
 python3.12 adapters/claude-code/neocortex_manifest.py --check      /path/to/project
+git -C /path/to/project check-ignore NEOCORTEX .claude/settings.json   # must print both; a missing name is already tracked: git rm -r --cached it and commit
+#    (single-project layout: run check-ignore on the four governance/ names as well; for the log, name governance/hook_heartbeat.log)
 
 # 5. Arm every migrated project — dry-run first; enforcement follows migration
 #    (re-run these three after you add a project in step 4)
 python3.12 adapters/claude-code/install_adapters.py --root /path/to/your/workspace          # preview
 python3.12 adapters/claude-code/install_adapters.py --root /path/to/your/workspace --apply
 python3.12 adapters/claude-code/install_adapters.py --root /path/to/your/workspace --check  # drift check
-#    If the root itself holds NEOCORTEX/, --apply also rewrites its .claude/settings.json: re-approve once, at the root:
-#    python3.12 .claude/hooks/hook_support.py --write-approved
 
 # 6. THE STEP PEOPLE SKIP: has the session-start hook actually fired here, or is it merely installed?
 python3.12 adapters/claude-code/verify_fires.py --root /path/to/your/workspace
@@ -433,6 +437,9 @@ next change that adds a line must remove one or amend the budget, per Art. 11):
   Hook changes: the CLOSEOUT gate counts only removed or changed timeout lines, not added ones; the GOVERNOR MODIFIED
   notice prints in full once per session, then as one short line (state in a new file, `governance/.h4c_seen.json`);
   the session anchor's open-work digest shows at most 15 rows and skips struck-through ones.
+- **Release v0.13.2** (2026-11-08): the installer no longer rewrites the settings file of a root that is also a project, so the tamper
+  check stays quiet after a normal install and the folder can be moved: re-run `--apply` after any move (it re-points child settings and the `INSTALLED.json` paths). A root an earlier version already rewrote keeps
+  working where it is and gets a notice with the manual restore steps; the installer does not change it.
 - **Constitution** — v1.0, ratified 2026-06-10 after line-by-line + adversarial review; the Independence Preamble was added
   2026-06-20 and four changes were ratified 2026-10-27 (see Reviews). **NEOCORTEX_SPEC** and **UNIVERSAL_SKILL_SPEC** state
   their own versions and ratification dates in their headers.

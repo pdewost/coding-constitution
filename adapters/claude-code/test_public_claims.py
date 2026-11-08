@@ -306,3 +306,18 @@ def test_d1_the_status_list_names_release_v0131():
     gone = _missing(bullet, ("a non-finite timestamp", "a hard-linked ledger", "a symlinked ledger folder",
                              "a lock wait past 30 s", "a lock file replaced while held", "`<non-regular>`", "verify_gate 0.3.1"))
     assert not gone, f"v0.13.1 bullet does not name the 0.3.1 outcome changes (consumer note, 0.3.1 section): {gone}"
+
+
+def test_v0132_the_status_list_names_the_installer_change():
+    """The release note says what changed in the installer."""
+    assert "- **Release v0.13.2**" in _readme_section("Status & maturity"), "Status & maturity has no v0.13.2 release bullet"
+    gone = _missing(_block("- **Release v0.13.2**"), ("no longer rewrites", "tamper check", "a notice", "manual restore"))
+    assert not gone, f"v0.13.2 bullet does not name the installer change: {gone}"
+
+
+def test_v0132_no_adopter_is_told_to_re_approve_after_install():
+    """The re-approve step existed only because the installer rewrote the root's settings; it must go with the defect."""
+    readme = " ".join(_readme().split())
+    bullet = readme[readme.index("**A single project.**"):readme.index("**Several projects sharing one policy.**")]
+    assert "--write-approved" not in bullet, "the single-project bullet still asks for a re-approval after install"
+    assert "also rewrites its .claude/settings.json" not in readme, "adopt step 5 still says --apply rewrites the root's settings"
