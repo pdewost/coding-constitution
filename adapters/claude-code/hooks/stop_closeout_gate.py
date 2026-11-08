@@ -1120,7 +1120,9 @@ def _tamper_details(test_paths: list) -> tuple:
             if ln.startswith("+") and not ln.startswith("+++") and re.search(
                     r"pytest\.mark\.(skip|xfail)|@unittest\.skip|pytest\.skip\(|\.skip\(|\bxit\(|\bxdescribe\(|\.only\(", ln):
                 added_skips += 1
-            if ln[:1] in "+-" and ln[:3] not in ("+++", "---") and re.search(r"timeout\D{0,12}\d", ln, re.I):
+            # 2026-10-28: removed lines only, as assertions are. A changed timeout shows as a removed line, so
+            # a change or a deletion still counts; a pure addition (a new test that sets its own timeout) does not.
+            if ln.startswith("-") and not ln.startswith("---") and re.search(r"timeout\D{0,12}\d", ln, re.I):
                 timeout_lines += 1
     bits = []
     if removed_asserts:
@@ -1128,25 +1130,172 @@ def _tamper_details(test_paths: list) -> tuple:
     if added_skips:
         bits.append(f"{added_skips} skip/xfail/only marker(s) added")
     if timeout_lines:
-        bits.append(f"{timeout_lines} timeout line(s) changed")
+        bits.append(f"{timeout_lines} timeout line(s) removed or changed")
     return kept, ("; diff: " + ", ".join(bits)) if bits else ""
 
 
 
-def _h4c_advisories() -> list:
-    """H4c lines for this turn (shared by the normal path and the stop_hook_active path, B4-38)."""
+# H4c once-per-session de-duplication (founder-approved 2026-10-28; evidence: governance/pilot_telemetry.log held
+# 247 GOVERNOR MODIFIED notes out of 310 advisory notes since 2026-10-06, 37 of them on 2026-10-28). The first report
+# of an issue set in a session is the full text; the same set on a later turn of the SAME session is one short line
+# that still names the count and the files. NEVER silent: any change of the set, and any other session, prints in full.
+# State: governance/.h4c_seen.json, {"v": 1, "sessions": {"<key>": {"fp", "n", "ts"}}}, the 50 most recent sessions.
+# It is only a hint: if it cannot be read or written, the full text is printed (fail-open toward MORE output).
+_H4C_STATE = ("governance", ".h4c_seen.json")
+_H4C_STATE_MAX_SESSIONS = 50
+_H4C_STATE_MAX_BYTES = 64 * 1024
+_H4C_SHORT_NAMES = 5
+
+
+def _h4c_session_key(data: dict) -> str:
+    """The Stop input's session_id, else a hash of its transcript_path; "" = no usable key (no de-duplication)."""
+    try:
+        sid = data.get("session_id")
+        if isinstance(sid, str) and sid.strip():
+            return "s:" + sid.strip()[:128]
+        tp = data.get("transcript_path")
+        if isinstance(tp, str) and tp:
+            return "t:" + hashlib.sha256(tp.encode("utf-8", "replace")).hexdigest()[:32]
+    except Exception:
+        pass
+    return ""
+
+
+def _nofollow_dirfd(root: Path, dirs) -> int:
+    """fd of root/<dirs...>, every component opened with O_NOFOLLOW (same walk as _safe_append)."""
+    import os
+    dfd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for d in dirs:
+            nfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dfd)
+            os.close(dfd)
+            dfd = nfd
+    except BaseException:
+        os.close(dfd)
+        raise
+    return dfd
+
+
+def _safe_read_text(root: Path, rel_parts: tuple, limit: int) -> str:
+    """Read root/<rel_parts...> with the _safe_append guards: no symlink at any component, a regular file only,
+    not hardlinked, at most `limit` bytes. Raises OSError otherwise (a symlink raises ELOOP)."""
+    import os
+    import stat
+    *dirs, name = rel_parts
+    dfd = _nofollow_dirfd(root, dirs)
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_size > limit:
+                raise OSError("not a plain regular file of bounded size")
+            chunks = []
+            while True:
+                b = os.read(fd, 65536)
+                if not b:
+                    break
+                chunks.append(b)
+            return b"".join(chunks).decode("utf-8", "replace")
+        finally:
+            os.close(fd)
+    finally:
+        os.close(dfd)
+
+
+def _safe_replace_text(root: Path, rel_parts: tuple, text: str) -> None:
+    """Replace the content of root/<rel_parts...> with the _safe_append guards: opened O_NOFOLLOW|O_NONBLOCK and
+    WITHOUT O_TRUNC, refused (nothing touched) if it is not a regular file or is hardlinked, truncated only after
+    that check. Raises OSError when refused; the caller swallows it."""
+    import os
+    import stat
+    *dirs, name = rel_parts
+    dfd = _nofollow_dirfd(root, dirs)
+    try:
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=dfd)
+        try:
+            st = os.fstat(fd)
+            if not (stat.S_ISREG(st.st_mode) and st.st_nlink == 1):
+                raise OSError("refusing a non-regular or hardlinked state file")
+            os.ftruncate(fd, 0)
+            raw, done = text.encode(), 0
+            while done < len(raw):
+                done += os.write(fd, raw[done:])
+        finally:
+            os.close(fd)
+    finally:
+        os.close(dfd)
+
+
+def _h4c_load_sessions() -> dict:
+    """key -> {"fp", "n", "ts"}; {} when the state is absent, unreadable, symlinked or malformed."""
+    try:
+        obj = json.loads(_safe_read_text(ROOT, _H4C_STATE, _H4C_STATE_MAX_BYTES))
+        raw = obj.get("sessions") if isinstance(obj, dict) else None
+        if not isinstance(raw, dict):
+            return {}
+        return {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, dict)}
+    except Exception:
+        return {}
+
+
+def _h4c_store_sessions(sessions: dict) -> None:
+    while len(sessions) > _H4C_STATE_MAX_SESSIONS:
+        sessions.pop(next(iter(sessions)))                     # oldest first: insertion order = recency
+    try:
+        _safe_replace_text(ROOT, _H4C_STATE, json.dumps({"v": 1, "sessions": sessions}))
+    except Exception:
+        pass                                                   # fail-open: the next turn prints in full
+
+
+def _h4c_report(detail: list, full: list, session_key: str) -> list:
+    """The lines for this turn's issue set: `full` the first time (or whenever the set differs from the one last
+    reported in this session, or the state cannot be trusted), one short line when it is the same set again.
+    `detail` = every issue string (the fingerprint covers all of them, not the 3 the full text shows)."""
+    if not session_key:
+        return full
+    fp = hashlib.sha256("\n".join(sorted(set(detail))).encode("utf-8", "replace")).hexdigest() if detail else ""
+    sessions = _h4c_load_sessions()
+    prev = sessions.get(session_key)
+    if not detail:
+        if session_key in sessions:                           # resolved: forget it, so a recurrence prints in full
+            del sessions[session_key]
+            _h4c_store_sessions(sessions)
+        return full
+    names = []
+    for issue in detail:
+        n = issue.split(":", 1)[0].strip()
+        if n and n not in names:
+            names.append(n)
+    if isinstance(prev, dict) and prev.get("fp") == fp:
+        shown = ", ".join(names[:_H4C_SHORT_NAMES])
+        if len(names) > _H4C_SHORT_NAMES:
+            shown += f", +{len(names) - _H4C_SHORT_NAMES} more"
+        return [f"GOVERNOR (H4c): {len(names)} governed file(s) still differ from the approved list ({shown}): "
+                f"ask the founder to re-approve or restore"]
+    sessions.pop(session_key, None)
+    sessions[session_key] = {"fp": fp, "n": len(names), "ts": datetime.datetime.now().isoformat(timespec="seconds")}
+    _h4c_store_sessions(sessions)
+    return full
+
+
+def _h4c_advisories(session_key: str = "") -> list:
+    """H4c lines for this turn (shared by the normal path and the stop_hook_active path, B4-38).
+    `session_key` ("" = none) turns on the once-per-session de-duplication of the issue lines below; the
+    _PRELOAD_ISSUES and GOVERNOR CHECK UNAVAILABLE lines are always printed in full."""
     out = []
     for issue in _PRELOAD_ISSUES:                      # B4-07 / B5-30: siblings refused before execution
         out.append(f"GOVERNOR MODIFIED (H4c): {issue}")
     # B3-10 (reviewer A round 3): "cannot check" is reported, never silent; the comparator's own bytes are
     # checked independently of it.
     own = _approved_digest_check(".claude/hooks/hook_support.py")
+    detail, full = [], []                              # the de-duplicated issue lines: every issue, and today's text
     if _hs is None:
         out.append(f"GOVERNOR CHECK UNAVAILABLE (H4c): .claude/hooks/hook_support.py could not be "
                           f"loaded ({type(_HS_ERR).__name__}), so the governor cannot be compared"
                           + (f"; GOVERNOR MODIFIED (H4c): {own}" if own else ""))
     elif own:
-        out.append(f"GOVERNOR MODIFIED (H4c): {own}")
+        detail.append(own)
+        full.append(f"GOVERNOR MODIFIED (H4c): {own}")
     if _hs is not None:
         # Seat B B-27: a MISSING approved list is reported too, wherever a governance/ tree exists
         # (a deleted baseline must be visible within one turn); kits without governance/ stay silent.
@@ -1156,9 +1305,11 @@ def _h4c_advisories() -> list:
                   # file marks an installed governor as surely as governance/ does.
                   or (ROOT / "governance").is_dir() or (ROOT / ".claude" / "settings.json").exists()]
         if issues:
-            out.append("GOVERNOR MODIFIED (H4c): " + "; ".join(issues[:3])
+            detail.extend(issues)
+            full.append("GOVERNOR MODIFIED (H4c): " + "; ".join(issues[:3])
                               + (f" (+{len(issues) - 3} more)" if len(issues) > 3 else "")
                               + " — re-approve at a founder-visible landing or restore the approved files")
+        out.extend(_h4c_report(detail, full, session_key))
     return out
 
 
@@ -1171,7 +1322,7 @@ def main() -> None:
         # B4-38 (reviewer A round 4): no second H1 block, but a governor change made during closeout recovery is still
         # reported within the turn (bounded: the same H4c advisory as below).
         try:
-            msgs = _h4c_advisories()
+            msgs = _h4c_advisories(_h4c_session_key(data))
             if msgs:
                 print(json.dumps({"systemMessage": " | ".join(msgs)}))
         except Exception as exc:
@@ -1430,7 +1581,7 @@ def main() -> None:
     # H4c — governor tamper evidence. Silent while no approved list exists (the session anchor
     # reports that case once per session); after a landing, any mismatch is surfaced every turn.
     try:
-        advisories.extend(_h4c_advisories())
+        advisories.extend(_h4c_advisories(_h4c_session_key(data)))
     except Exception as exc:
         _log_error("stop_closeout_gate.h4c", exc)
 

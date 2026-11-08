@@ -30,17 +30,19 @@ def run_review(
     outdir: str,
 ) -> dict:
     """Returns {'verdict_path','attestation_path','producer_id','judge_unreachable'}.
-    On judge failure, returns judge_unreachable=True with no verdict (gate => exit 4)."""
+    On judge failure, returns judge_unreachable=True with no verdict (gate => exit 4) and a
+    'reason': "<type>: <message>" when the judge raised, "judge returned no verdict" otherwise."""
     os.makedirs(outdir, exist_ok=True)
     anchor_kind = _anchor_kind_for(backend, orchestrator_id, anchor_id)
 
     try:
         verdict = judge_fn(bundle)
-    except Exception:
-        verdict = None
+    except Exception as e:
+        return {"verdict_path": None, "attestation_path": None, "producer_id": None,
+                "judge_unreachable": True, "reason": f"{type(e).__name__}: {e}"}
     if not verdict:
-        return {"verdict_path": None, "attestation_path": None,
-                "producer_id": None, "judge_unreachable": True}
+        return {"verdict_path": None, "attestation_path": None, "producer_id": None,
+                "judge_unreachable": True, "reason": "judge returned no verdict"}
 
     producer_id = verdict.get("producer_id")
     verdict_path = os.path.join(outdir, "verdict.json")

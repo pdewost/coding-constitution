@@ -27,7 +27,7 @@ import ast, bisect, os, re, stat, subprocess, sys, pathlib
 
 PATTERNS = {
     # --- identity / location ---
-    "absolute-home-path":  r"/Users/|/home/[a-z]",
+    "absolute-home-path":  r"/" r"Users/|/home/[a-z]",   # split so this table line is not itself a hit
     "owner-name":          r"Dewost",
     # The author's contact handle, private folder name and phone prefix are NOT listed here (2026-10-28, external
     # review MED-2): a published scanner must not carry the strings it protects. They live in the untracked terms
@@ -82,8 +82,9 @@ EXCEPTIONS = [
     ("LICENSE", "owner-name", "Copyright (c) 2026 Philippe Dewost",
      "A copyright notice must name its holder. Removing it would not protect anything "
      "and would make the licence unenforceable."),
+    # History-only since v0.13.1: the current tree splits this literal, published commits still hold it (keep).
     ("governance/scripts/continuity_sweep.py", "absolute-home-path",
-     'ABS_ALLOWED_PREFIXES = ("/Users/", "/Volumes/", "/Applications/", "/opt/",',
+     'ABS_ALLOWED_PREFIXES = ("/' 'Users/", "/Volumes/", "/Applications/", "/opt/",',   # split, as the canary below
      "Not a path to anywhere: it is the prefix list the sweep uses to RECOGNISE absolute "
      "paths. Same class as this scanner matching its own PATTERNS table."),
     # --- Already-published history. These four live in commits that predate this gate and
@@ -501,14 +502,20 @@ def main() -> int:
     except Unreadable as e:
         print(f"BLOCKED — {e}")
         return 1
-    if not os.path.lexists(root / TERMS_FILE) and os.environ.get("PUBLISH_SCAN_NO_PRIVATE_TERMS") != "1":
-        print(f"BLOCKED — no {TERMS_FILE}: the private terms (codenames, contact handle) are not applied, so CLEAN would"
+    # FS-4i: a terms file that yields no term (empty, or comments only) is an absent one, not a checked one.
+    if not extra and os.environ.get("PUBLISH_SCAN_NO_PRIVATE_TERMS") != "1":
+        what = (f"{TERMS_FILE} holds no term (empty, or comments only)" if os.path.lexists(root / TERMS_FILE)
+                else f"no {TERMS_FILE}")
+        print(f"BLOCKED — {what}: the private terms (codenames, contact handle) are not applied, so CLEAN would"
               " prove nothing about them. Restore the file, or set PUBLISH_SCAN_NO_PRIVATE_TERMS=1 if you have none.")
         return 1
+    # FS-4e/4i: when no private term was applied, the closing line must not read like a full scan's.
+    terms_checked = bool(extra)
     PATTERNS.update(extra)
     print(f"publish_scan: {len(extra)} project-codename pattern(s) loaded from "
           f"{TERMS_FILE}" if extra else
-          f"publish_scan: no {TERMS_FILE} found — generic patterns only")
+          f"publish_scan: {TERMS_FILE} holds no term (empty, or comments only) — generic patterns only"
+          if os.path.lexists(root / TERMS_FILE) else f"publish_scan: no {TERMS_FILE} found — generic patterns only")
     allowed = _allowed()
     # The scanner is exempt from nothing but the identity examples inside its own tables (cf. _self_exempt_lines);
     # a private term or a key in it would ship through the one file nobody read (cf. _codename_pattern).
@@ -574,7 +581,8 @@ def main() -> int:
               " (a new candidate), or declare the class in ID_ALLOWED_CLASSES with a reason. Do not push.")
         return 1
     if not findings and not hist:
-        print("\nCLEAN — §4 gate passed. Safe to push.")
+        print("\nCLEAN — §4 gate passed. Safe to push." if terms_checked else
+              "\nCLEAN (generic patterns only; private terms not checked)")
         return 0
     if not findings:
         print("\nBLOCKED on history. Commits carry hits the working tree does not.")

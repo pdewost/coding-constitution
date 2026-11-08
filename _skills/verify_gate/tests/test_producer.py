@@ -105,3 +105,29 @@ def test_produce_judge_unreachable(tmp_path):
         backend="stateless_llm", orchestrator_id="ci", anchor_id="run-7", outdir=str(tmp_path),
         call_fn=lambda p: "not json at all")
     assert out["exit"] == core.ExitCode.JUDGE_UNREACHABLE
+
+
+# ---- FS-3: the missing default judge fails loud, with its remedy -----------
+# The import is blocked (a None entry in sys.modules makes `import` raise ImportError), so no model is reached
+# even in a workspace where the local_llm cascade exists.
+_CASCADE = "_skills.local_llm.scripts.cascade"
+
+
+def test_produce_without_call_fn_names_the_remedy(tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, _CASCADE, None)
+    out = produce_review.produce(
+        artifact="art", evidence=[], drafter_id="author", producer_id="reviewer",
+        backend="stateless_llm", orchestrator_id="ci", anchor_id="run-7", outdir=str(tmp_path))
+    assert out["exit"] == core.ExitCode.JUDGE_UNREACHABLE
+    assert "call_fn" in out.get("reason", ""), out
+
+
+def test_cli_without_call_fn_names_the_remedy(tmp_path, monkeypatch, capsys):
+    monkeypatch.setitem(sys.modules, _CASCADE, None)
+    ev = tmp_path / "evidence.json"; ev.write_text("[]")
+    rc = produce_review.main(["--artifact", "art", "--evidence-json", str(ev), "--producer-id", "reviewer",
+                              "--drafter-id", "author", "--orchestrator-id", "ci", "--anchor-id", "run-7",
+                              "--outdir", str(tmp_path / "out")])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == core.ExitCode.JUDGE_UNREACHABLE and out["exit"] == core.ExitCode.JUDGE_UNREACHABLE
+    assert "call_fn" in out.get("reason", ""), out

@@ -21,8 +21,10 @@ SRC = pathlib.Path(os.environ.get("HOOK_DIR") or pathlib.Path(__file__).resolve(
 @pytest.fixture
 def ws():
     # Fixture base OUTSIDE every governed tree (2026-10-05: under the candidate dir, the gate's cwd walk-up
-    # reached the REAL governance/ and blocked on its real JOURNAL) and outside the gate's exempt temp roots.
-    base = pathlib.Path(os.environ.get("OUTCOME_TEST_BASE") or pathlib.Path.home() / "Library" / "Caches" / "hooks_batch2_tests" / "_tmp_s4")
+    # reached the REAL governance/ and blocked on its real JOURNAL). The system temp dir is fine here although the Stop
+    # gate exempts it (stop_closeout_gate.py:204-205): neither hook under test, postedit_compile_gate.py nor
+    # post_push_audit.sh, exempts temp roots (FS-4j, 2026-11-07).
+    base = pathlib.Path(os.environ.get("OUTCOME_TEST_BASE") or pathlib.Path(tempfile.gettempdir()) / "hooks_batch2_tests" / "_tmp_s4")
     base.parent.mkdir(parents=True, exist_ok=True)
     base.mkdir(exist_ok=True)
     tmp = pathlib.Path(tempfile.mkdtemp(dir=base))
@@ -59,6 +61,7 @@ def test_s4_22_js_syntax_is_checked(ws):
     assert o.get("decision") == "block"
 
 
+@pytest.mark.skipif(not shutil.which("zsh"), reason="zsh absent")
 def test_s4_22_zsh_syntax_is_checked(ws):
     f = ws / "x.zsh"
     f.write_text("if then fi fi\n")

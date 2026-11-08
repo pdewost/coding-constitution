@@ -23,7 +23,7 @@ new adapter, never a policy rewrite. Data values (windows, ports) come from
 | VERIFY-GATE | Independent verification of code-affecting work: a verdict whose independence is **externally anchored** (harness-spawned subagent / stateless API / CI / human with external identity) — never the drafting agent self-grading. Advisory where un-anchored; bound to a change-set, single-use receipt | Before a code-edited turn completes (couples to CLOSEOUT-GATE) | Block once on an anchored, substantiated-HIGH refutation; **advisory (warn) where un-anchored — never bricks.** Mechanizes "Assume Independent Audit" / Art. 1 / Art. 12 via `_skills/verify_gate` |
 | CONTEXT-GUARD | Context-window fill is a **budget with a cliff**: work started near the ceiling is finished by a compaction that nobody reviewed. Two thresholds over an observed fill fraction — **70% advisory** ("close out soon; do not open new scope") and **80% deny on new code edits** ("context ≥80%: close out, no new scope"). Reading a fill signal is **not optional but its availability is**: no harness hook payload carries context usage (P0.1, CONFIRMED ABSENT), so the signal comes from a harness-specific bridge writing an observed value to `governance/.session_state/` | 70%: on user-prompt submission. 80%: before `Edit`/`Write` tool execution. Compaction: flush JOURNAL only, never a full closeout | 70% → add ≤2 advisory lines. 80% → deny the edit, naming the threshold and the remedy (close out). **Degradation is the rule, not the exception** — see the stanza below |
 
-**L1 distribution (Claude Code):** `adapters/claude-code/install_adapters.py` generates project adapters from the workspace-root `.claude/settings.json` as the single policy source; `governance/adapters/INSTALLED.json` tracks the armed-projects manifest. Hook fires are self-proving via `governance/hook_heartbeat.log` (written by `session_anchor.sh`); `verify_fires.py` reports PROVEN/PENDING per project.
+**L1 distribution (Claude Code):** `adapters/claude-code/install_adapters.py` generates project adapters from the workspace-root `.claude/settings.json` as the single policy source; `governance/adapters/INSTALLED.json` tracks the armed-projects manifest. The one live proof is a SessionStart heartbeat in `governance/hook_heartbeat.log` (written by `session_anchor.sh`); `verify_fires.py` reports it as PROVEN/STALE/PENDING per project and lists the other wired events as "no live proof here" (covered by the synthetic `test_hooks.sh`).
 
 **VERIFY-GATE — trust anchor + rollout (2026-06-20, advisory-first; 3 §3-review rounds).**
 A single in-context agent cannot mechanically verify itself, so the trust anchor sits OUTSIDE
@@ -96,6 +96,10 @@ first, the three days would not have been spent.
 **advisory-only and recorded as a proxy** — never promoted to a deny, because a byte count is not a
 token count and the guard must not assert precision it does not have.
 
-**Self-test duty (Art. 12):** every policy ships with a fire/no-fire test
+**Self-test duty (Art. 12):** every hooked policy must ship with a fire/no-fire test
 matrix (`adapters/<harness>/test_hooks.sh`); the adopter
-re-runs it. A hook that cannot prove it fires is presumed dead.
+re-runs it. A hook that cannot prove it fires is presumed dead. In this kit the duty is met for ANCHOR, GUARDRAIL,
+COMPILE-GATE, CLOSEOUT-GATE, DENY-* and PUSH-AUDIT. It is NOT yet met for VERIFY-GATE, SKILL-INDEX-REGEN, the
+session-record tripwire and HANDOFF: their hooks (`verify_advisory.py`, `skill_index_regen.py`, `session_record_gate.py`,
+the `cold start` path of `prompt_guardrail.sh`) have no fire/no-fire case; VERIFY-GATE's library is tested by
+`_skills/verify_gate/tests` and HANDOFF's resolver by `test_handoff_resolve.py`. CONTEXT-GUARD has no hook in this kit.

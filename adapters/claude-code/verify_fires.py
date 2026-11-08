@@ -7,12 +7,25 @@ Reads INSTALLED.json (armed-projects manifest) and hook_heartbeat.log
 each armed project whether a real SessionStart has PROVEN to have fired
 from that directory, or whether it is PENDING (not yet observed).
 
+SCOPE: the live proof is SessionStart ONLY. The heartbeat is written by
+session_anchor.sh alone; no other hook event (Stop, PreToolUse, ...) leaves a
+PWD-bearing trace, so PROVEN says nothing about them. The other wired events
+are listed (from ROOT/.claude/settings.json) as "wired, no live proof here";
+their coverage is the synthetic test_hooks.sh. PROVEN does not mean the
+project's enforcement is "self-proving".
+
 PROVEN means: a heartbeat line whose PWD == the project path, at most
 FRESH_DAYS old (by its own UTC timestamp).
 STALE means: the latest matching line is older than FRESH_DAYS — the hooks
 fired once, which proves nothing about today (reviewer A S4-53, 2026-10-05).
 PENDING means: no matching line yet — correct and expected for freshly-armed
 projects that have not yet had a real session opened in them.
+
+Output header (after the "Armed projects" line):
+  Live proof: SessionStart only (session_anchor.sh heartbeat).
+  Wired, no live proof here: <events>; covered by test_hooks.sh (synthetic).
+    (or "wired events: unknown" when ROOT/.claude/settings.json is absent,
+    unparseable, unsafe or has no "hooks" object; the exit code never changes)
 
 Output format (one line per project):
   PROVEN   <project_path>  [<latest fire timestamp>]
@@ -203,6 +216,21 @@ def _load_installed():
     return json.loads(text)
 
 
+def _wired_events():
+    """Hook events wired in ROOT/.claude/settings.json (the keys of "hooks") minus SessionStart,
+    or None when that cannot be established (absent, unsafe, unparseable, no "hooks" object)."""
+    try:
+        text = _safe_read_text(ROOT / ".claude" / "settings.json")
+        if text is None:
+            return None
+        hooks = json.loads(text).get("hooks")
+    except (UnsafeFile, ValueError, OSError, AttributeError):
+        return None
+    if not isinstance(hooks, dict):
+        return None
+    return [e for e in hooks if e != "SessionStart"]
+
+
 def main():
     try:
         records   = _load_installed()
@@ -225,6 +253,12 @@ def main():
     pending_count = 0
 
     print(f"Armed projects: {len(armed)}  |  Heartbeat entries: {len(heartbeat)}")
+    print("Live proof: SessionStart only (session_anchor.sh heartbeat).")
+    wired = _wired_events()
+    if wired is None:
+        print("wired events: unknown")
+    else:
+        print(f"Wired, no live proof here: {', '.join(wired) or 'none'}; covered by test_hooks.sh (synthetic).")
     print()
 
     for rec in sorted(armed, key=lambda r: r["project_path"]):
@@ -247,7 +281,7 @@ def main():
             print(f"  UNARMED  {rec['project_path']}")
 
     print()
-    print(f"Summary: {proven_count} PROVEN, {stale_count} STALE, {pending_count} PENDING"
+    print(f"Summary: {proven_count} PROVEN (SessionStart), {stale_count} STALE, {pending_count} PENDING"
           + (f", {len(unarmed)} UNARMED" if unarmed else ""))
     if pending_count:
         print("PENDING is expected for freshly-armed projects awaiting their"

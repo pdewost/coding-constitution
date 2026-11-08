@@ -69,7 +69,8 @@ The policies are defined once in `spec/POLICY_CORE.md` (harness-neutral) and tra
 per-harness adapter. That file is the count, not this README: at v0.13 it has 13 rows, of which one
 is retired (ASK-SESSION-RECORD, whose hook still ships and still asks before any read of a
 `governance/session_record/` folder the kit no longer creates) and one has no hook in this kit
-(CONTEXT-GUARD, below). The Claude Code adapter ships the rest, self-tested:
+(CONTEXT-GUARD, below). The Claude Code adapter ships the rest, most of them self-tested (Self-test, below, names the
+four whose hooks have no fire/no-fire case yet):
 
 | Policy | Fires on | Effect |
 |---|---|---|
@@ -78,7 +79,7 @@ is retired (ASK-SESSION-RECORD, whose hook still ships and still asks before any
 | **HANDOFF** | a prompt of exactly `cold start` | resumes a line of work from its predecessor's handoff file (`NEOCORTEX/HANDOFF_<role>_<date>_<time>Z.md`) with nothing pasted: one open role → its cold-start section; several → the list to choose from; none → why; never a guess (`handoff_resolve.py`) |
 | **COMPILE-GATE** | after each file edit | syntax-checks the edited file (`py_compile` / `bash -n` / `zsh -n` / `node --check` for `.js`, `.mjs`, `.cjs` when Node is installed / `osacompile`) and **blocks** with the error fed straight back; no TypeScript check (see *TypeScript & JavaScript*, below) |
 | **CLOSEOUT-GATE** | agent tries to end the turn | **blocks once** if code was edited but no verification ran, or the journal blew its size bound — sees an edit made through the harness's own file-editing tools OR a Bash command that writes/overwrites a tracked file (heredoc, `sed -i`, `tee`, `cp`/`mv`/`rsync`, `dd of=`); a write form neither of those catches is invisible to it; a verification counts only if it is a recognised test run (`verifier_recognizer.py`: piped, backgrounded, echoed or `|| true` runs do not count) |
-| **VERIFY-GATE** | a code-edited turn completes | checks for an **independently-anchored** verdict — a reviewer that could not see the author's intent (subagent / stateless API / CI / human); **advisory** by default, blocking once a project opts in with a `.verify/armed` file; a change-set-bound, single-use receipt (`_skills/verify_gate`, which `bootstrap.sh` places in your workspace) |
+| **VERIFY-GATE** | a code-edited turn completes | checks for an **independently-anchored** verdict — a reviewer that could not see the author's intent (subagent / stateless API / CI / human); **advisory** by default, blocking once a project opts in with a `.verify/armed` file; a change-set-bound receipt that the CLI spends once under a locked ledger; the hooks check it without spending, so inside its window it satisfies every Stop over the same unchanged change-set until it is spent once — by the CLI included: for a receipt stored in `<project>/.verify/` the CLI spends into the ledger the Stop gate reads, and the next Stop refuses it (a corrupt ledger invalidates every receipt). A receipt does not yet record whether its review was independent, and does not check that its verdict file still hashes to `verdict_sha256`; the CLI's ledger follows the receipt's folder; and `CI=1` counts as an anchor (`_skills/verify_gate`, which `bootstrap.sh` places in your workspace) |
 | **DENY-ARCHIVE** | before tool run | denies `rm`/`mv`/`find -delete`/`xargs` etc. that would delete or move an archive *out*; paths resolved physically (symlinks, `..`, `cd`, `git -C`) |
 | **DENY-CONTACT-DELETE** | before tool run | denies irreversible `delete person` AppleScript (born from a real data-loss incident) |
 | **DENY-WINDOW** | before tool run | denies heavy extraction/vectorization during machine-specific forbidden windows |
@@ -112,11 +113,14 @@ agent tries `osascript -e 'delete person 1'`, the hook returns:
 > for irreversible actions is that *the human performs them manually.* This is
 > stated in the code, not hidden.
 >
-> **Two known limits in this release** (the kit is wired exactly as its author's own workspace): the DENY guard is
+> **Three known limits in this release** (the kit is wired exactly as its author's own workspace): the DENY guard is
 > registered for `Bash` and the osascript tool only, so the file-editing tools (Edit, Write, MultiEdit, NotebookEdit) never
 > reach it; the constitution and `ANTIGRAVITY-2025.md` are protected from them by the settings' static `deny` rules instead.
 > And a guard that cannot even start (no usable Python) is, like any failing hook, non-blocking. A fail-closed launcher and
 > the editing-tool routing exist in the author's tree and are being hardened; they are not part of this release.
+> Last, the guard reads command text, so interpreter code that reaches a protected file only at run time (a computed name, a
+> glob, a script file it writes and runs) is not seen; in this release neither are two literal forms, `python -c` with
+> `open(…,'w')` on a named file and `perl -e 'unlink glob …'`.
 >
 > **No git hook, no CI.** Where the specs mention a `pre-commit` gate, that is the author's own git hook; this kit ships
 > none. A check becomes un-bypassable only where you run it yourself at a shared remote (a server-side hook or CI).
@@ -189,7 +193,9 @@ a project:
 - **A single project.** Run `bootstrap.sh` pointed at that project's own root; its hooks are
   live directly there. Then still run `install_adapters.py --root <project> --apply`: discovery
   includes the root itself when it holds `NEOCORTEX/`, and `verify_fires.py` needs the
-  `INSTALLED.json` that `--apply` writes. One known limit: `cold start` at a lone project's root
+  `INSTALLED.json` that `--apply` writes. That run also rewrites the root's own `.claude/settings.json`, a
+  governed file, so the tamper check reports it modified (in full once per session, then as one short line) until
+  you re-approve once: `python3.12 .claude/hooks/hook_support.py --write-approved` (run at the project root). One known limit: `cold start` at a lone project's root
   does not yet find that project's handoff (the resolver looks for a `governance/` project there).
 - **Several projects sharing one policy.** Run `bootstrap.sh` once at a root that *contains*
   your project directories as children (the root need not be a project itself — this repo's
@@ -204,7 +210,8 @@ a project:
 - **Checking the whole set.** `install_adapters.py --root <root> --check` reports drift (an
   armed project whose generated settings no longer match the canonical source) and `--apply` is
   idempotent, so re-running it after a hook change is the normal way to propagate it. `verify_fires.py
-  --root <root>` then reports PROVEN/PENDING per project — this is where the origin workspace's own
+  --root <root>` then reports PROVEN/PENDING per project. Live proof: SessionStart only (the session-start heartbeat); the
+  other wired events are covered by `test_hooks.sh`, synthetically. This is where the origin workspace's own
   76-day gap (below) was ultimately visible, once the missing project was actually in scope.
 
 The dividing line is simply: does your root need a project-discovery step, or is the root
@@ -233,6 +240,8 @@ with size bounds the validator enforces — so context never silently rots.
 **Prerequisite: Python 3.12** on the PATH as `python3.12`: the commands below name it, and COMPILE-GATE looks for
 `python3.12` by name (without it the `.py` syntax check is disabled and one self-test case fails). The install tools
 alone run on 3.10 or later. The adversarial-review scripts also need PyYAML (`pip install pyyaml`).
+The unit suite runs with `python3.12 -m pytest adapters/claude-code _skills`; it needs pytest and PyYAML, and optionally
+zsh, node and osacompile for the tests that call them.
 
 ```bash
 git clone https://github.com/pdewost/coding-constitution
@@ -259,9 +268,12 @@ less PAICodeConstitution-2026.md
 less DECLARATION.md
 ```
 
-A hook that can't prove it fires is presumed dead (Art. 12) — so every policy
-ships with that matrix, and `adapters/claude-code/verify_fires.py` reports which projects are actually
-armed.
+A hook that can't prove it fires is presumed dead (Art. 12). Self-test: the `test_hooks.sh` matrix covers ANCHOR,
+GUARDRAIL, COMPILE-GATE, CLOSEOUT-GATE, DENY-* and PUSH-AUDIT. Four hooks have no fire/no-fire case yet: VERIFY-GATE
+(`verify_advisory.py`; its library is tested by `_skills/verify_gate/tests`), SKILL-INDEX-REGEN, the session-record
+tripwire, and HANDOFF's `cold start` path (its resolver is tested by `test_handoff_resolve.py`).
+`adapters/claude-code/verify_fires.py` reports which projects have had a hook fire live.
+Live proof: SessionStart only; the other events are tested synthetically by `test_hooks.sh`.
 
 ---
 
@@ -300,8 +312,10 @@ python3.12 adapters/claude-code/neocortex_manifest.py --check      /path/to/proj
 python3.12 adapters/claude-code/install_adapters.py --root /path/to/your/workspace          # preview
 python3.12 adapters/claude-code/install_adapters.py --root /path/to/your/workspace --apply
 python3.12 adapters/claude-code/install_adapters.py --root /path/to/your/workspace --check  # drift check
+#    If the root itself holds NEOCORTEX/, --apply also rewrites its .claude/settings.json: re-approve once, at the root:
+#    python3.12 .claude/hooks/hook_support.py --write-approved
 
-# 6. THE STEP PEOPLE SKIP: has a hook actually fired here, or is it merely installed?
+# 6. THE STEP PEOPLE SKIP: has the session-start hook actually fired here, or is it merely installed?
 python3.12 adapters/claude-code/verify_fires.py --root /path/to/your/workspace
 ```
 
@@ -309,14 +323,15 @@ python3.12 adapters/claude-code/verify_fires.py --root /path/to/your/workspace
 running, and "installed" reads exactly like "working" until you look. In the workspace this
 was extracted from, the *governance* directory itself was excluded from adapter discovery by
 a one-line filter — so the enforcement layer had never once run on the project that defines
-it, for 76 days. The gap was visible the moment someone ran step 5's `--check` and read the
+it, for 76 days (author-reported, as is the count below). The gap was visible the moment someone ran step 5's `--check` and read the
 project list: `verify_fires.py` couldn't have shown it (it only reports on projects already
 present in the discovery list `--apply` wrote — a project the list never named is invisible to
 it, not merely PENDING). What `verify_fires.py` gave, once the missing entry was found and
-fixed, was the follow-up number worth knowing: **PROVEN** (a hook demonstrably fired from this
-path) vs. **PENDING** (armed, never fired) — in this case, 0 of 146 Stop-hook firings, because
-it had never been armed at all. Until a project says PROVEN, its enforcement is a plan, not a
-control — and until it's in step 5's own discovery list, `verify_fires.py` can't even tell you
+fixed, was the follow-up number worth knowing: **PROVEN** (the SessionStart hook demonstrably fired from this
+path) vs. **PENDING** (armed, never fired). Live proof: SessionStart only; the other events are covered by
+`test_hooks.sh`. In this case 0 of 146 Stop-hook advisory lines, counted from the workspace's own telemetry log on
+2026-07-29, came from the governance project, because it had never been armed at all. Until a project says PROVEN for SessionStart, its enforcement is a
+plan, not a control — and until it's in step 5's own discovery list, `verify_fires.py` can't even tell you
 that much.
 
 Full procedure: `adapters/claude-code/README.md` (policy → mechanism map) and
@@ -341,7 +356,8 @@ python3.12 _skills/adversarial_review/scripts/assemble_review.py \
 This was not theoretical for this release:
 
 - The three core documents were adversarially reviewed before ratification —
-  the round caught **10+ HIGH findings**, several invisible to the drafter.
+  the round caught **10+ HIGH findings** (author-reported: no record of that round ships in `reviews/`), several invisible
+  to the drafter.
 - The L1 installer and hooks were red-teamed and **structurally hardened against
   the symlink / intermediate-component / TOCTOU / FIFO-hang / hardlink-clobber
   classes** before this repo was prepared. The file I/O walks each path
@@ -407,6 +423,16 @@ next change that adds a line must remove one or amend the budget, per Art. 11):
 
 - **Release v0.13** (2026-10-27): the amended constitution, the cold-start handoff, and the documentation fixes listed in
   the 2026-10-27 review record.
+- **Release v0.13.1** (2026-11-08): fixes three claims an outside reader made about v0.13: the receipt ledger is locked, atomic and
+  fails closed; `verify_fires.py` says what it proves; a missing judge fails loud and names its remedy. It also fixes the
+  reader's smaller documentation and test findings. Outcomes that change for a receipt check (`validate_receipt`, same
+  signature, still read-only): a corrupt ledger, a missing or malformed nonce, and a timestamp more than 300 s ahead are
+  now invalid, where v0.13 accepted them. So are a non-finite timestamp and a hard-linked ledger; the CLI also refuses a
+  symlinked ledger folder, a lock wait past 30 s and a lock file replaced while held; and a FIFO or device in a
+  change-set hashes as `<non-regular>` (a socket as `<missing>`) instead of hanging the hash (verify_gate 0.3.1).
+  Hook changes: the CLOSEOUT gate counts only removed or changed timeout lines, not added ones; the GOVERNOR MODIFIED
+  notice prints in full once per session, then as one short line (state in a new file, `governance/.h4c_seen.json`);
+  the session anchor's open-work digest shows at most 15 rows and skips struck-through ones.
 - **Constitution** — v1.0, ratified 2026-06-10 after line-by-line + adversarial review; the Independence Preamble was added
   2026-06-20 and four changes were ratified 2026-10-27 (see Reviews). **NEOCORTEX_SPEC** and **UNIVERSAL_SKILL_SPEC** state
   their own versions and ratification dates in their headers.
@@ -417,7 +443,9 @@ next change that adds a line must remove one or amend the budget, per Art. 11):
   `PROTOCOL_publish_regime.md`, `query_interaction_log.py`, `cold_start_ledger.py`, `monthly_audit.py`, and the skills
   `local_llm`, `sprint_closeout`, `github_commit_audit`, `visual_audit`, `calendar_bridge`, `applescript_bridge`). They are
   named for provenance; they are not shipped. The one import of such a skill, the default model call in
-  `_skills/verify_gate/scripts/judges.py`, raises an error that says to pass your own `call_fn` instead.
+  `_skills/verify_gate/scripts/judges.py`, raises an error that says to pass your own `call_fn` instead. The producer
+  CLI's default backend (`produce_review.py --backend stateless_llm`) therefore ends at exit 4 (`judge_unreachable`) with a
+  reason naming `call_fn`.
 
 ---
 

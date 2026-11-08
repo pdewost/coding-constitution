@@ -8,9 +8,11 @@ Two ways in:
   - harness_subagent (PRIMARY, agent-driven): the agent spawns a fresh reviewer subagent and
     passes its verdict via `judge_fn` (or `agent_verdict=`). The orchestrator (the agent/harness)
     is the attestor; the subagent is the producer => attestor != producer => can block.
-  - stateless_llm (FALLBACK, deployable): omit judge_fn; this calls local_llm in a fresh context.
+  - stateless_llm (FALLBACK): omit judge_fn and pass call_fn=<your model call>; without call_fn the
+    default needs a local_llm-style client, which is NOT shipped, and the review ends judge_unreachable
+    (exit 4) with a reason that says so.
 
-CLI (stateless path, for CI / hooks):
+CLI (stateless path, for CI / hooks; it takes no call_fn, so it needs that client installed):
   produce_review.py --artifact X --evidence-json E.json --backend stateless_llm
     --producer-id reviewer --drafter-id author --orchestrator-id ci --anchor-id <run-id>
     --changed f1 f2 --outdir DIR [--require-blocking]
@@ -54,7 +56,7 @@ def produce(*, artifact: str, evidence: list[dict], drafter_id: str, producer_id
 
     if res["judge_unreachable"]:
         return {"exit": core.ExitCode.JUDGE_UNREACHABLE, "decision": "judge_unreachable",
-                "verdict_path": None, "attestation_path": None, "receipt_path": None,
+                "reason": res.get("reason", ""), "verdict_path": None, "attestation_path": None, "receipt_path": None,
                 "blocking": False, "advisory": False, "block_findings": []}
 
     verdict = core.load_json(res["verdict_path"])
@@ -85,7 +87,9 @@ def main(argv=None) -> int:  # pragma: no cover (CLI; the stateless local_llm pa
     ap = argparse.ArgumentParser(description="produce + gate an independent review")
     ap.add_argument("--artifact", required=True)
     ap.add_argument("--evidence-json", required=True, help="path to a JSON list of evidence items")
-    ap.add_argument("--backend", default="stateless_llm")
+    ap.add_argument("--backend", default="stateless_llm",
+                    help="stateless_llm (default) needs a local_llm-style model client, which is not shipped: "
+                         "without it the run ends at exit 4 (judge_unreachable) with a reason naming call_fn")
     ap.add_argument("--producer-id", required=True)
     ap.add_argument("--drafter-id", required=True)
     ap.add_argument("--orchestrator-id", required=True)

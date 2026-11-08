@@ -15,7 +15,7 @@
 
 version: 1
 extracted: 2026-08-25
-re_extracted: 2026-10-29   # v0.13 r6: R45, R45b added (r5: R44; r4, 2026-10-28: R5 changed; R29-R43b added; 14 files added to the allowlist)
+re_extracted: 2026-11-08   # v0.13.1 (first extraction 2026-11-07): R40b added (s220 F6). v0.13 r6 (2026-10-29): R45, R45b added (r5: R44; r4, 2026-10-28: R5 changed; R29-R43b added; 14 files added to the allowlist)
 source: "a private multi-project workspace (not published)"
 method: "clean-room allowlist extraction; see PROTOCOL_publish_regime §1/§5 in the private tree"
 gate: "publish_scan.py — the §4 pre-publish scan, as code; exit 0 required before any push"
@@ -264,6 +264,11 @@ redactions:
     why: "Specs cite the author's records for provenance; marked in place. (2026-10-28) Scope: extracted files, backticked
           form only. The public_only adversarial_review/SKILL.md is marked by hand (as R24). Code comments and test fixtures
           that name records unbackticked are not rewritten; the README's provenance sentence covers them. (2026-10-29)"
+  - id: R40b
+    pattern: "a backticked governance/NEOCORTEX/...md path that R40's dated-name form misses (a dated folder, a <date> placeholder)"
+    replacement: "the same, followed by '(private, not shipped)'"
+    why: "Two such paths in the verify_gate SKILL.md changelog shipped unmarked in the v0.13.1 candidate (bundle review
+          s220 F6, 2026-11-08). Runs after R40 and skips a path already marked."
   - id: R41
     pattern: "a private skill name in a comment of lint_dispatch_class.py"
     replacement: "example_llm_client"
@@ -303,7 +308,7 @@ declared_exceptions:   # mirrors the 8 EXCEPTIONS in publish_scan.py (2026-10-28
   - {file: LICENSE, pattern: owner-name, why: "A copyright notice must name its holder."}
   - {file: LICENSE, pattern: owner-name, why: "The same notice in its pre-2026-08 form, in published history."}
   - {file: NOTICE, pattern: owner-name, why: "As above, in NOTICE."}
-  - {file: governance/scripts/continuity_sweep.py, pattern: absolute-home-path, why: "The prefix list the sweep uses to recognise absolute paths, not a path."}
+  - {file: governance/scripts/continuity_sweep.py, pattern: absolute-home-path, why: "The prefix list the sweep uses to recognise absolute paths, not a path. History-only since v0.13.1 (the current tree splits the literal); kept because published commits hold it."}
   - {file: governance/scripts/continuity_sweep.py, pattern: local-database, why: "A list of file extensions, not a database filename."}
   - {file: ANTIGRAVITY.md, pattern: absolute-home-path, why: "A rule forbidding hardcoded paths, citing the sandbox paths it forbids (published history)."}
   - {file: ANTIGRAVITY.md, pattern: local-database, why: "A rule requiring these extensions be gitignored (published history)."}
@@ -348,6 +353,9 @@ historical_exposure:   # re-audited 2026-10-29 over every commit reachable from 
              new mentions of _interaction_log/ in v0.13. They name the author's tools for provenance and none is shipped
              (README, Status). Renaming would change code (judges.py imports local_llm in its default model call) without
              reducing exposure. The examples can be found with `git grep -n -w -E 'local_llm|notify|sprint_closeout|github_commit_audit|visual_audit|calendar_bridge|applescript_bridge|applescript_operations|strategic_rebase|llm_client.py|supervisor.py|dashboard_app.py|cold_start_ledger.jsonl|OPERATOR_CRAFT|_interaction_log|62 of 133|48 of 60|1 of 22|13 of 22|9 projects|transcripts' -- . ':!redaction_map.yaml'`."
+  - what: "the author's clone-folder name (the R21 class) in a hook, a hook test and a policy row"
+    status: "PUBLISHED in fee48bc only (introduced there; replaced by R21 from 75c6116, v0.12, 2026-10-08). History
+             keeps it. The account handle inside it is already public in README's clone URL. (Declared 2026-11-08, s220 F14.)"
   - what: "the owner's account name, lower case, in README's clone URL"
     status: "INTENTIONAL — it is this repository's own address. publish_scan's owner-name class is case-sensitive and
              does not match it; case-folding that class (with this URL and the no-reply identity as exceptions) is

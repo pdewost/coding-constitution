@@ -625,3 +625,278 @@ def test_b5_18_variable_writes_resolve_in_order(ws, tmpl, counts):
 def test_b5_09_sed_option_clusters_are_edits(ws, flags):
     t = T(ws).prompt().bash(f"sed {flags} 's/a/b/' {ws}/proj/src/app.py", "")
     assert blocked(run(ws, t)), flags
+
+
+# ================================================================== 2026-10-28: H2 timeout counting, H4c once per session
+# H2: a timeout line counts only on REMOVED diff lines (as assertions do). A new test that sets its own timeout is
+# ordinary work (false positive 2026-10-28); a changed or deleted timeout is what the advisory is for.
+def _h2_msg(ws, base, new):
+    proj = ws / "proj"
+    tf = proj / "tests/test_app.py"
+    _git_base(proj, tf, base)
+    tf.write_text(new, encoding="utf-8")
+    t = T(ws).prompt().edit(proj / "src/app.py").edit(tf).bash("pytest -q", "2 passed in 0.01s")
+    return run(ws, t).get("systemMessage", "")
+
+
+def test_h2_a_new_test_that_sets_a_timeout_is_not_reported(ws):
+    base = "def test_a():\n    assert f() == 2\n"
+    new = base + "\n\ndef test_b():\n    r = run(hard_timeout_s=20)\n    assert r == 3\n"
+    msg = _h2_msg(ws, base, new)
+    assert "TEST-TAMPER" not in msg and "timeout" not in msg, msg
+
+
+def test_h2_a_changed_timeout_value_is_reported_once(ws):
+    base = "def test_a():\n    r = run(hard_timeout_s=20)\n    assert r == 2\n"
+    new = "def test_a():\n    r = run(hard_timeout_s=90)\n    assert r == 2\n"
+    msg = _h2_msg(ws, base, new)
+    assert "TEST-TAMPER CHECK (H2)" in msg, msg
+    assert "; diff: 1 timeout line(s) removed or changed" in msg, msg      # one changed line = one count, not two
+
+
+def test_h2_a_deleted_timeout_line_is_reported(ws):
+    base = "def test_a():\n    run.timeout = 20\n    assert f() == 2\n"
+    new = "def test_a():\n    assert f() == 2\n"
+    msg = _h2_msg(ws, base, new)
+    assert "TEST-TAMPER CHECK (H2)" in msg, msg
+    assert "; diff: 1 timeout line(s) removed or changed" in msg, msg
+
+
+def test_h2_removed_assertions_still_report_beside_the_timeout_wording(ws):
+    base = "def test_a():\n    run.timeout = 20\n    assert f() == 2\n"
+    new = "def test_a():\n    pass\n"
+    msg = _h2_msg(ws, base, new)
+    assert "1 assertion line(s) removed, 1 timeout line(s) removed or changed" in msg, msg
+
+
+# H4c: the issue set is printed in full the first time in a session, then as ONE short line naming the files and the
+# count while the set stays the same; any change of the set, and any other session, prints in full again. The state
+# is governance/.h4c_seen.json; when it cannot be trusted the full text is printed (more output, never less).
+FULL = "GOVERNOR MODIFIED (H4c)"
+SHORT = "GOVERNOR (H4c): "
+STATE = ("governance", ".h4c_seen.json")
+
+
+def _stop_turn(ws, session_id=None, active=False, transcript="t_h4c.jsonl"):
+    """One Stop-hook turn with an EMPTY transcript (no edits): only the governor checks speak.
+    Returns systemMessage ("" when none)."""
+    tp = ws.parent / transcript
+    tp.write_text("", encoding="utf-8")
+    inp = {"transcript_path": str(tp)}
+    if session_id is not None:
+        inp["session_id"] = session_id
+    if active:
+        inp["stop_hook_active"] = True
+    env = dict(os.environ)
+    env.pop("CLAUDE_PROJECT_DIR", None)
+    env.pop("GOVERNANCE_WORKSPACE", None)
+    r = subprocess.run([sys.executable, str(ws / ".claude/hooks/stop_closeout_gate.py")], input=json.dumps(inp),
+                       capture_output=True, text=True, cwd=str(ws), env=env, timeout=30)
+    assert r.returncode == 0, r.stderr[-600:]
+    return (json.loads(r.stdout) if r.stdout.strip() else {}).get("systemMessage", "")
+
+
+def _state_path(ws):
+    return ws.joinpath(*STATE)
+
+
+def _drift(ws, text='{"drift": 1}\n'):
+    (ws / ".claude" / "settings.json").write_text(text, encoding="utf-8")
+
+
+def _restore(ws):
+    (ws / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+
+
+def test_h4c_first_turn_of_a_session_prints_the_full_text(ws):
+    _drift(ws)
+    msg = _stop_turn(ws, "sess-A")
+    assert f"{FULL}: .claude/settings.json: approved" in msg, msg
+    assert "re-approve at a founder-visible landing or restore the approved files" in msg, msg
+    assert SHORT not in msg
+
+
+def test_h4c_same_session_same_issues_prints_one_short_line_naming_the_file(ws):
+    _drift(ws)
+    first = _stop_turn(ws, "sess-A")
+    second = _stop_turn(ws, "sess-A")
+    assert FULL not in second, second
+    assert (f"{SHORT}1 governed file(s) still differ from the approved list (.claude/settings.json): "
+            f"ask the founder to re-approve or restore") in second, second
+    assert second.count("GOVERNOR") == 1 and len(second) < len(first), (first, second)
+    assert FULL in _stop_turn(ws, "sess-B")                                  # and it never went silent for anyone else
+
+
+def test_h4c_the_short_line_names_every_file_up_to_the_cap_and_counts_the_rest(ws):
+    hooks = ws / ".claude" / "hooks"
+    for i in range(7):
+        (hooks / f"extra{i}.sh").write_text("exit 0\n", encoding="utf-8")
+    _stop_turn(ws, "sess-A")
+    second = _stop_turn(ws, "sess-A")
+    assert f"{SHORT}7 governed file(s) still differ from the approved list (" in second, second
+    assert ".claude/hooks/extra0.sh" in second and "+2 more" in second and "extra6.sh" not in second, second
+
+
+def test_h4c_any_change_of_the_issue_set_prints_in_full_again(ws):
+    hooks = ws / ".claude" / "hooks"
+    _drift(ws)
+    assert FULL in _stop_turn(ws, "s")
+    assert FULL not in _stop_turn(ws, "s")
+    _drift(ws, '{"drift": 2}\n')                                            # same file, a NEW live sha
+    msg = _stop_turn(ws, "s")
+    assert FULL in msg and ".claude/settings.json: approved" in msg, msg
+    assert FULL not in _stop_turn(ws, "s")
+    (hooks / "sneaky.sh").write_text("exit 0\n", encoding="utf-8")          # a NEW file
+    msg = _stop_turn(ws, "s")
+    assert FULL in msg and "sneaky.sh: NOT IN the approved list" in msg, msg
+    msg = _stop_turn(ws, "s")
+    assert FULL not in msg and f"{SHORT}2 governed file(s)" in msg and "sneaky.sh" in msg, msg
+    (hooks / "sneaky.sh").unlink()                                          # a RESOLVED file
+    msg = _stop_turn(ws, "s")
+    assert FULL in msg and "sneaky.sh" not in msg, msg
+    assert f"{SHORT}1 governed file(s)" in _stop_turn(ws, "s")
+
+
+def test_h4c_a_recurrence_after_full_resolution_prints_in_full(ws):
+    _drift(ws)
+    assert FULL in _stop_turn(ws, "s")
+    assert FULL not in _stop_turn(ws, "s")
+    _restore(ws)
+    assert _stop_turn(ws, "s") == ""                                        # clean: silent, as before
+    _drift(ws)                                                              # the very same drift comes back
+    assert FULL in _stop_turn(ws, "s")
+
+
+def test_h4c_another_session_prints_in_full_and_does_not_reset_the_first(ws):
+    _drift(ws)
+    assert FULL in _stop_turn(ws, "sess-A")
+    assert FULL not in _stop_turn(ws, "sess-A")
+    assert FULL in _stop_turn(ws, "sess-B")
+    assert FULL not in _stop_turn(ws, "sess-B")
+    assert f"{SHORT}1 governed file(s)" in _stop_turn(ws, "sess-A")
+
+
+def test_h4c_without_a_session_id_the_transcript_path_identifies_the_session(ws):
+    _drift(ws)
+    assert FULL in _stop_turn(ws, None, transcript="t_one.jsonl")
+    assert FULL not in _stop_turn(ws, None, transcript="t_one.jsonl")
+    assert FULL in _stop_turn(ws, None, transcript="t_two.jsonl")
+
+
+def test_h4c_the_stop_hook_active_path_uses_the_same_logic(ws):
+    _drift(ws)
+    assert FULL in _stop_turn(ws, "sess-A", active=True)                    # first report of the set: full
+    msg = _stop_turn(ws, "sess-A", active=True)
+    assert FULL not in msg and f"{SHORT}1 governed file(s)" in msg and ".claude/settings.json" in msg, msg
+    assert FULL not in _stop_turn(ws, "sess-A")                             # the normal path shares the same state
+    assert FULL in _stop_turn(ws, "sess-B", active=True)
+
+
+def test_h4c_without_any_key_every_turn_is_in_full(ws):
+    _drift(ws)
+    for _ in range(2):                                                      # stop_hook_active reads no transcript
+        tp = subprocess.run([sys.executable, str(ws / ".claude/hooks/stop_closeout_gate.py")],
+                            input=json.dumps({"stop_hook_active": True}), capture_output=True, text=True,
+                            cwd=str(ws), timeout=30)
+        assert FULL in json.loads(tp.stdout)["systemMessage"], tp.stdout
+    assert not _state_path(ws).exists()
+
+
+def test_h4c_state_file_format_and_path(ws):
+    _drift(ws)
+    _stop_turn(ws, "sess-A")
+    assert _state_path(ws) == ws / "governance" / ".h4c_seen.json"
+    st = json.loads(_state_path(ws).read_text(encoding="utf-8"))
+    assert st["v"] == 1 and list(st["sessions"]) == ["s:sess-A"], st
+    rec = st["sessions"]["s:sess-A"]
+    assert len(rec["fp"]) == 64 and rec["n"] == 1 and rec["ts"][:2] == "20", rec
+    assert oct(_state_path(ws).stat().st_mode & 0o777) == "0o600"
+
+
+def test_h4c_state_is_bounded_to_the_50_most_recent_sessions(ws):
+    old = {f"s:old{i:02d}": {"fp": "0" * 64, "n": 1, "ts": "2026-01-01T00:00:00"} for i in range(60)}
+    _state_path(ws).write_text(json.dumps({"v": 1, "sessions": old}), encoding="utf-8")
+    _drift(ws)
+    _stop_turn(ws, "sess-new")
+    keys = list(json.loads(_state_path(ws).read_text(encoding="utf-8"))["sessions"])
+    assert len(keys) == 50 and keys[-1] == "s:sess-new", keys
+    assert "s:old00" not in keys and "s:old59" in keys, keys                # the oldest went, the newest stayed
+
+
+@pytest.mark.parametrize("damage", ["garbage", "wrong-shape", "empty", "huge"])
+def test_h4c_a_damaged_state_file_prints_in_full_and_heals(ws, damage):
+    _drift(ws)
+    assert FULL in _stop_turn(ws, "s")
+    _state_path(ws).write_text({"garbage": "this is not json", "wrong-shape": '["a list"]', "empty": "",
+                                "huge": '{"v": 1, "pad": "' + "x" * 70000 + '"}'}[damage], encoding="utf-8")
+    assert FULL in _stop_turn(ws, "s"), damage                              # the state cannot be trusted: full
+    assert FULL not in _stop_turn(ws, "s"), damage                          # and the next turn rewrote it
+
+
+def test_h4c_an_unreadable_state_file_prints_in_full(ws):
+    _drift(ws)
+    assert FULL in _stop_turn(ws, "s")
+    sp = _state_path(ws)
+    sp.chmod(0o000)
+    try:
+        assert FULL in _stop_turn(ws, "s")
+        assert FULL in _stop_turn(ws, "s")                                  # cannot be written either: full again
+    finally:
+        sp.chmod(0o600)
+
+
+def test_h4c_a_symlinked_state_file_is_refused_and_never_written_through(ws):
+    _drift(ws)
+    assert FULL in _stop_turn(ws, "s")
+    sp = _state_path(ws)
+    decoy = ws.parent / "decoy_state.json"
+    decoy.write_text(sp.read_text(encoding="utf-8"), encoding="utf-8")      # a state that WOULD say "already seen"
+    before = decoy.read_text(encoding="utf-8")
+    sp.unlink()
+    sp.symlink_to(decoy)
+    assert FULL in _stop_turn(ws, "s")
+    assert FULL in _stop_turn(ws, "s")
+    assert decoy.read_text(encoding="utf-8") == before and sp.is_symlink()
+
+
+def test_h4c_a_hardlinked_state_file_is_refused_and_not_modified(ws):
+    _drift(ws)
+    assert FULL in _stop_turn(ws, "s")
+    sp = _state_path(ws)
+    twin = ws.parent / "twin_state.json"
+    os.link(sp, twin)
+    before = twin.read_text(encoding="utf-8")
+    assert FULL in _stop_turn(ws, "s")
+    assert FULL in _stop_turn(ws, "s")
+    assert twin.read_text(encoding="utf-8") == before
+
+
+def test_h4c_a_symlinked_governance_dir_never_gets_a_state_file(ws):
+    _drift(ws)
+    real = ws.parent / "real_governance"
+    (ws / "governance").rename(real)
+    (ws / "governance").symlink_to(real)
+    assert FULL in _stop_turn(ws, "s")
+    assert FULL in _stop_turn(ws, "s")
+    assert not (real / ".h4c_seen.json").exists()
+
+
+def test_h4c_unavailable_and_preload_lines_are_never_shortened(ws):
+    hook_support = ws / ".claude" / "hooks" / "hook_support.py"
+    hook_support.write_text(hook_support.read_text() + "\n# edited after approval\n")
+    for _ in range(2):
+        msg = _stop_turn(ws, "s")
+        assert "GOVERNOR CHECK UNAVAILABLE (H4c)" in msg, msg
+        assert f"{FULL}: .claude/hooks/hook_support.py: approved" in msg and "(not executed)" in msg, msg
+        assert SHORT not in msg, msg
+    assert not _state_path(ws).exists()                                     # nothing to de-duplicate: nothing recorded
+
+
+def test_h4c_a_sibling_refused_before_execution_stays_full_while_the_integrity_line_is_deduplicated(ws):
+    vr = ws / ".claude" / "hooks" / "verifier_recognizer.py"
+    vr.write_text(vr.read_text() + "\n# edited after approval\n")
+    first = _stop_turn(ws, "s")
+    second = _stop_turn(ws, "s")
+    assert "verifier_recognizer.py: approved" in first and "(not executed)" in first and "re-approve at" in first, first
+    assert "(not executed)" in second and "approved" in second, second     # the preload line, in full, again
+    assert "re-approve at" not in second and f"{SHORT}1 governed file(s)" in second, second

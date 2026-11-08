@@ -164,10 +164,12 @@ echo "  2. bash $(q "$KIT/test_hooks.sh") --root $(q "$WORKSPACE")              
 echo "  3. give each project its state first:  $(q "$PY") $(q "$KIT/neocortex_manifest.py") --init /path/to/project"
 echo "  4. $(q "$PY") $(q "$KIT/install_adapters.py") --root $(q "$WORKSPACE")            # DRY RUN"
 echo "     $(q "$PY") $(q "$KIT/install_adapters.py") --root $(q "$WORKSPACE") --apply    # arm the projects"
-echo "  5. $(q "$PY") $(q "$KIT/verify_fires.py") --root $(q "$WORKSPACE")                # PROVEN vs PENDING"
+echo "  5. $(q "$PY") $(q "$KIT/verify_fires.py") --root $(q "$WORKSPACE")                # SessionStart heartbeat: PROVEN vs PENDING"
 echo
 echo "Or export it once:  export GOVERNANCE_WORKSPACE=$(q "$WORKSPACE")"
 echo
 echo "Step 5 matters more than it looks: 'installed' is not 'firing'. A project can sit"
-echo "armed for months without a hook ever running. Until verify_fires.py prints PROVEN"
-echo "for a project, its enforcement is a plan, not a control."
+echo "armed for months without a SessionStart ever reaching it. Live proof: SessionStart only"
+echo "(session_anchor.sh heartbeat): until verify_fires.py prints SessionStart PROVEN for a"
+echo "project, nothing shows its hooks run. It does not measure Stop, PreToolUse or the rest;"
+echo "those are covered by test_hooks.sh (synthetic)."

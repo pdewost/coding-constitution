@@ -200,15 +200,25 @@ except OSError:
 try:
     if not stat.S_ISREG(os.fstat(fd).st_mode) or os.fstat(fd).st_nlink != 1:   # S4-47: hardlinks refused too
         sys.exit(0)
+    CAP = 15   # 2026-11-02 (founder "Fix both"): the anchor printed 70 lines at ROOT (33 digest rows); test_hooks.sh bounds it below 60
+    shown = more = 0
     for l in os.fdopen(fd, encoding="utf-8", errors="replace"):
         if not l.startswith('| ') or l.startswith('| Item') or '---|' in l:
             continue
         c = [x.strip() for x in l.strip().strip('|').split('|')]
         if len(c) < 3:
             continue
+        if c[0].startswith('~~'):   # struck-through = closed; it stays in the file, not in the digest
+            continue
+        if shown == CAP:
+            more += 1
+            continue
         item = re.sub(r'[*`]', '', c[0]).split('—')[0].strip()
         status = re.sub(r'[*`]', '', c[2])[:62]
         print(f'  • {item} — {status}')
+        shown += 1
+    if more:
+        print(f'  … {more} more open item(s) in governance/OPEN_WORK.md')
 except OSError:
     sys.exit(0)
 PY

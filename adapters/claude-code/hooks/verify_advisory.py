@@ -5,8 +5,8 @@ Observability only. After a code-edited turn, it checks whether an independent v
 (a valid change-set-bound VERIFY-RECEIPT) exists for the files edited THIS turn. If not, it
 records PENDING to telemetry — and **never blocks, never warns the user, never fails loud.**
 
-This is the advisory-first rollout hook: deploy via install_adapters so verify_fires can report which projects
-are not yet verify-armed, with ZERO disruption to active development. A project flips to BLOCKING
+This is the advisory-first rollout hook: deploy it via install_adapters with ZERO disruption to active development.
+(verify_fires.py proves SessionStart only; it says nothing about this Stop hook.) A project flips to BLOCKING
 only when it is explicitly armed (a wired reviewer + a proven receipt) — that is a separate,
 opt-in step, NOT this hook.
 

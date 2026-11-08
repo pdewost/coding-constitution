@@ -22,6 +22,7 @@ SOFTWARE.
 
 ---
 
-Documentation files (PAICodeConstitution-2026.md, ANTIGRAVITY.md, spec/,
-_skills/adversarial_review/SKILL.md, _skills/adversarial_review/lenses/) are
-additionally licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+Documentation files (every *.md file, including README.md, DECLARATION.md,
+PAICodeConstitution-2026.md, ANTIGRAVITY.md, spec/, reviews/, the SKILL.md and
+spec files under _skills/ and the adapter README; adapters/antigravity/AGENTS.md.template;
+and _skills/adversarial_review/lenses/) are additionally licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).

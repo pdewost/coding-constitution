@@ -181,7 +181,7 @@ KNOWN_SUFFIXES = (
     ".yml", ".txt", ".csv", ".html", ".css", ".scpt", ".applescript", ".log",
     ".plist", ".xlsx", ".spec.js")
 DROP_CHARS = set("*?<>{}$|;\"'")
-ABS_ALLOWED_PREFIXES = ("/Users/", "/Volumes/", "/Applications/", "/opt/",
+ABS_ALLOWED_PREFIXES = ("/" "Users/", "/Volumes/", "/Applications/", "/opt/",
                         "/usr/local/", "~")
 
 

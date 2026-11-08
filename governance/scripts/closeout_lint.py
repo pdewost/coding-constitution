@@ -627,7 +627,7 @@ def _blocked_tags(lines: list[str], i: int) -> set[str]:
     """The M-tags a register row actually claims are BLOCKED, deduplicated.
 
     Two false positives this exists to kill, both produced on the first real run against
-    `governance/NEOCORTEX/CRUMBLES.md`:
+    `governance/NEOCORTEX/CRUMBLES.md` (private, not shipped):
 
     1. A flat 6-line lookback reached ABOVE `crumbles:` into the file's RESOLVED header — the
        comment block whose whole purpose is to record that M-5 shipped. Firing there tells a

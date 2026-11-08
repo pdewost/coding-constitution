@@ -61,11 +61,11 @@ def main(argv=None) -> int:
         except (OSError, ValueError) as e:
             print(json.dumps({"decision": "receipt_unreadable", "error": str(e)}))
             return core.ExitCode.RECEIPT_INVALID
-        ok, why = receipt_mod.validate_receipt(rec, changed_paths=a.changed, ledger_path=ledger)
+        # One locked call validates AND spends (0.3.0): two runs on one receipt on one ledger cannot both pass.
+        ok, why = receipt_mod.validate_and_consume(rec, changed_paths=a.changed, ledger_path=ledger)
         if not ok:
             print(json.dumps({"decision": "receipt_invalid", "reason": why}))
             return core.ExitCode.RECEIPT_INVALID
-        receipt_mod.consume(rec["nonce"], ledger)
         print(json.dumps({"decision": "receipt_valid", "reason": why}))
         return core.ExitCode.PASS
 

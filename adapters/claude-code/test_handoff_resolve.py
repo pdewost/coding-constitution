@@ -4,8 +4,8 @@
 PLAN_cold_start_handoff_harmonization_2026-10-26.md v0.2 (§1 invariants I1-I4, §2 closing convention, §3 opening, §10 gate fold;
 record AUDIT_adversarial_handoff_harmonization_plan_r1_2026-10-26.md, Rn = its findings).
 
-Fixture workspaces are built under ~/Library/Caches/hooks_batch2_tests/_tmp_handoff (never a real project path; same base family
-as test_session_anchor_coldstart.py). HANDOFF_RESOLVE_SRC overrides the module under test; ANCHOR_RENDER_SRC the reader it reuses.
+Fixture workspaces are built under the system temp dir (tempfile.gettempdir(), never a real project path or the home
+folder). HANDOFF_RESOLVE_SRC overrides the module under test; ANCHOR_RENDER_SRC the reader it reuses.
 Run: python3.12 -m pytest test_handoff_resolve.py -q
 """
 import datetime as dt
@@ -40,7 +40,7 @@ hr = _load()
 @pytest.fixture
 def ws():
     base = pathlib.Path(os.environ.get("HANDOFF_TEST_BASE")
-                        or pathlib.Path.home() / "Library" / "Caches" / "hooks_batch2_tests" / "_tmp_handoff")
+                        or pathlib.Path(tempfile.gettempdir()) / "hooks_batch2_tests" / "_tmp_handoff")
     base.mkdir(parents=True, exist_ok=True)
     tmp = pathlib.Path(tempfile.mkdtemp(dir=base)).resolve()
     w = tmp / "ws"

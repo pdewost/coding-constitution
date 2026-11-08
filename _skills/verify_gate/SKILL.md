@@ -1,9 +1,9 @@
 ---
 name: verify_gate
-version: 0.2.0
+version: 0.3.1
 kind: library
 status: active
-description: Harness- & coder-neutral VERIFY-GATE — validates an independently-produced, externally-attested verdict (LLM, subagent, or human) and blocks only when independence is anchored OUTSIDE the producing agent; change-set-bound single-use receipts.
+description: Harness- & coder-neutral VERIFY-GATE — validates an independently-produced, externally-attested verdict (LLM, subagent, or human) and blocks only when independence is anchored OUTSIDE the producing agent; change-set-bound receipts, spent once by the CLI under a locked, fail-closed ledger.
 ---
 
 DISPATCH-CLASS: adversarial@high
@@ -43,9 +43,19 @@ doesn't help.
 - `review_runner.run_review(...)` — the orchestrator: seals the bundle, spawns the judge,
   **writes the attestation out-of-band**. `harness_subagent | stateless_llm | human` backends;
   `judge_fn` injected (the real model call / harness spawn / form).
-- `receipt.py` — `write_receipt` / `validate_receipt` / `consume`: a VERIFY-RECEIPT bound to a
-  **change-set hash**, **single-use** (consumed-nonce ledger), **time-fresh** — closes the four
-  NEOCORTEX loss modes (edit-after / resume / fresh / crash all re-block).
+- `receipt.py` — `write_receipt` / `validate_receipt` / `validate_and_consume` / `consume`: a VERIFY-RECEIPT
+  bound to a **change-set hash** and **time-fresh** (a `ts` over 300 s ahead is invalid). **Single-use: the CLI
+  spends it through `verify_gate.py --receipt`; the hooks check without spending, so inside its window a receipt
+  satisfies every Stop over the same unchanged change-set until it is spent once, by the CLI included: for a
+  receipt stored in `<project>/.verify/` the CLI spends into the ledger the Stop gate reads, and the next Stop
+  refuses it.** `validate_and_consume` validates and spends under an exclusive `fcntl.flock` on a sidecar
+  `<ledger>.lock` and writes the ledger atomically (temp file, `fsync`, `os.replace`, folder `fsync`), so of
+  concurrent runs on one receipt at most one passes. The ledger fails closed: absent = empty; present but
+  unreadable or malformed = every receipt invalid, never rewritten (move it aside to restore service, which
+  also reopens every nonce it held). A receipt whose nonce is missing or not of the `uuid4().hex` form is
+  invalid. Platform: `flock` is advisory and unreliable on some network filesystems; without `fcntl` (not
+  POSIX) `validate_and_consume` refuses. Edit-after and crash re-block; resume and fresh re-block once the
+  receipt is spent or stale.
 - `evidence_bundle.seal(...)` — strips intent/answer-key from what a judge may see.
 - `verdict_form.build_verdict(...)` / `--out` CLI — the **human** path; a human verdict blocks
   only via a substantiated finding (`evidence.ref` file:line **+** `evidence.literal` quote).
@@ -86,7 +96,35 @@ produce_review.py --artifact X --evidence-json E.json --backend stateless_llm \
 ## Status / consumers
 
 `active` · advisory-mode only (promoted from incubating 2026-07-05 — its own `--lint` counts 6 real consumers). **Gate + producer both built** (the gate validates; the producer
-runs reviews — harness-subagent primary + stateless-llm fallback). `POLICY_CORE += VERIFY-GATE` is
+runs reviews — harness-subagent primary + stateless-llm fallback; the fallback's default model client is a
+`local_llm`-style client that is not shipped: without your own `call_fn` the producer, and its CLI's default
+`--backend stateless_llm`, end at exit 4 `judge_unreachable` with a reason naming `call_fn`). `POLICY_CORE += VERIFY-GATE` is
 landed (live, v1.1). **Wired as the `verify_advisory` Claude Code adapter hook (advisory-mode), deployable via `install_adapters`; blocking is per-project opt-in (`.verify/armed` + a wired reviewer + a proven change-set receipt).**
 Next (founder-gated): per-harness adapters + the advisory fleet push; the change-set receipt in
-`CLOSEOUT-GATE`. Tests: `python3 -m pytest _skills/verify_gate/tests/ -q` (**32 cases**).
+`CLOSEOUT-GATE`. Tests: `python3.12 -m pytest _skills/verify_gate/tests/ -q` (**69 cases**).
+
+## Changelog
+
+- **0.3.1** (2026-11-07; `governance/NEOCORTEX/_prep/fs1b_plan_v01_approved_text_2026-11-07/PLAN_verify_gate_031_s218_fixes_v0.1_approved_text.md` (private, not shipped),
+  the nine LOW findings of seat s218, VG-1 to VG-9). Receipt format, `validate_receipt` signature and read-only
+  contract, and the CLI exit codes are unchanged. Outcome changes, all toward invalid or toward not hanging: a
+  non-finite `ts` (NaN, +inf, -inf) is "bad receipt ts"; a ledger with `st_nlink != 1` (a hard-linked name) is
+  unreadable; a ledger folder that is a symlink is refused on the write path; a lock file replaced while held
+  refuses the write before the commit point; the lock wait ends after `LOCK_TIMEOUT_S` = 30 s with
+  "nonce ledger lock timeout" (exit 6); `RecursionError`, `MemoryError` and any `OSError` while preparing the lock
+  are `LedgerError`, so exit 6 with no traceback; a FIFO or other non-regular file in the change-set hashes as
+  `<non-regular>` instead of hanging; on Darwin the temp file and the folder are synced with `F_FULLFSYNC`
+  (falling back to `os.fsync`). Single use holds per ledger: of N concurrent runs on one receipt on one ledger,
+  at most one passes.
+- **0.3.0** (2026-11-02; `governance/NEOCORTEX/PLAN_fix_external_reader_claims_verify_gate_2026-10-30.md` (private, not shipped) v0.6,
+  FS-1 and FS-3). API: `receipt.validate_and_consume` added (the CLI's one locked validate-and-spend call);
+  `receipt.LedgerError` added; `receipt.consume` kept, now on the same locked atomic write, and it raises
+  `LedgerError` on a malformed nonce, a corrupt ledger or a failed write; `judges.stateless_llm_judge` raises
+  where it returned `None` when `call_fn` raises; `review_runner.run_review` and `produce_review.produce` return
+  a `reason` with `judge_unreachable`. Outcome changes: a corrupt ledger (unreadable, not a JSON list, or holding
+  anything but `uuid4().hex` nonces) invalidates every receipt, where it read as empty; a receipt with a missing
+  or malformed nonce, a boolean `ts`, or a `ts` over 300 s ahead, goes from valid to invalid; a symlinked or
+  non-regular ledger (a directory, a FIFO) invalidates every receipt, where a symlink was followed and a directory
+  read as empty; `verify_gate.py --receipt` exits 6
+  on any ledger failure. Consumers: `governance/NEOCORTEX/NOTE_verify_gate_0.3.0_consumers_<date>.md` (private, not shipped).
+- **0.2.0** and earlier: no changelog was kept (`_skills/UNIVERSAL_SKILL_SPEC.md` R-SHARED-6 mandates one).

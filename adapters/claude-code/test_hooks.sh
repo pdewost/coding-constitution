@@ -119,8 +119,13 @@ t2=$(mktemp); cat > "$t2" <<'EOF'
 EOF
 sj() { printf '{"transcript_path":"%s","stop_hook_active":%s}' "$1" "$2"; }
 check "edit w/o verification blocks" fire   "$(sj "$t1" false | "$H/stop_closeout_gate.py")"
-check "edit + pytest is silent"      silent "$(sj "$t2" false | "$H/stop_closeout_gate.py")"
-check "re-entry (active) is silent"  silent "$(sj "$t1" true  | "$H/stop_closeout_gate.py")"
+# Hermetic (2026-11-02, founder "Fix both"): run from an empty temp dir. Inside a real project the gate may add
+# NON-BLOCKING advisories about that project's records (continuity_sweep, closeout_lint), which a "silent" check
+# counts as a fire: the result then depended on the cwd's live state and timing, not on the gate's logic.
+qcwd="$(mktemp -d)"
+check "edit + pytest is silent"      silent "$(cd "$qcwd" && sj "$t2" false | "$H/stop_closeout_gate.py")"
+check "re-entry (active) is silent"  silent "$(cd "$qcwd" && sj "$t1" true  | "$H/stop_closeout_gate.py")"
+rmdir "$qcwd" 2>/dev/null
 rm -f "$t1" "$t2"
 
 echo "── context injectors (smoke: non-empty, bounded) ──"

@@ -211,7 +211,7 @@ JOURNAL and archives are consulted on demand, not by default.
    file): read order = manifest → status → active plans; all `BRAIN/`
    references repointed; any `COLD_START.md` retired — its still-true content
    merges into STATUS/PROTOCOL, the file itself goes to `_archive/`.
-7. Install the L1 enforcement adapter for this project: `python3 adapters/claude-code/install_adapters.py --apply` (generated local state, gitignored — idempotent, re-run anytime).
+7. Install the L1 enforcement adapter for this project: `python3.12 adapters/claude-code/install_adapters.py --root <workspace> --apply` (Python 3.12: the installer does not import under the stock 3.9; generated local state, gitignored — idempotent, re-run anytime).
 8. Evict data files (>64 KB, non-md) to `data/`.
 9. Record the migration as a `NOTE_neocortex_migration_<date>.md` with a
    before/after inventory — the audit evidence (Art. 1).

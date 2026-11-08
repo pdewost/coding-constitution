@@ -87,12 +87,11 @@ def _extract_json(raw: str):
 
 def stateless_llm_judge(bundle: dict, *, producer_id: str, drafter_id: str,
                         call_fn: Callable[[str], str], lenses: Optional[list[str]] = None) -> Optional[dict]:
-    """Run a fresh stateless review. `call_fn(prompt) -> model_text`. Returns a verdict or None."""
+    """Run a fresh stateless review. `call_fn(prompt) -> model_text`. Returns a verdict, or None when
+    the reply holds none. An error raised by `call_fn` propagates (FS-3, 0.3.0: it used to be swallowed,
+    which hid the default client's remedy); the runner turns it into judge_unreachable with its reason."""
     prompt = build_review_prompt(bundle, lenses=lenses)
-    try:
-        raw = call_fn(prompt)
-    except Exception:
-        return None
+    raw = call_fn(prompt)
     if not raw:
         return None
     return parse_verdict(raw, producer_id=producer_id, drafter_id=drafter_id,
