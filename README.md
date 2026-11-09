@@ -242,6 +242,9 @@ with size bounds the validator enforces — so context never silently rots.
 alone run on 3.10 or later. The adversarial-review scripts also need PyYAML (`pip install pyyaml`).
 The unit suite runs with `python3.12 -m pytest adapters/claude-code _skills`; it needs pytest and PyYAML, and optionally
 zsh, node and osacompile for the tests that call them.
+Three hook tests build their fixtures under `~/Library/Caches/hooks_batch2_tests` (a macOS-style path, used on any system), on purpose: the close-out gate exempts
+temp folders, so a fixture there would test nothing. Set `OUTCOME_TEST_BASE` to another folder outside your temp folder to
+move them.
 
 ```bash
 git clone https://github.com/pdewost/coding-constitution
@@ -440,6 +443,9 @@ next change that adds a line must remove one or amend the budget, per Art. 11):
 - **Release v0.13.2** (2026-11-08): the installer no longer rewrites the settings file of a root that is also a project, so the tamper
   check stays quiet after a normal install and the folder can be moved: re-run `--apply` after any move (it re-points child settings and the `INSTALLED.json` paths). A root an earlier version already rewrote keeps
   working where it is and gets a notice with the manual restore steps; the installer does not change it.
+- **Release v0.13.3** (2026-11-09): follow-ups from the v0.13.2 reviews, no behaviour change to the hooks: the skill spec says
+  which index checks are not yet built, more private record names are marked as not shipped, a placeholder is gone from the
+  scanner's database pattern, and the README explains where three hook tests build their fixtures.
 - **Constitution** — v1.0, ratified 2026-06-10 after line-by-line + adversarial review; the Independence Preamble was added
   2026-06-20 and four changes were ratified 2026-10-27 (see Reviews). **NEOCORTEX_SPEC** and **UNIVERSAL_SKILL_SPEC** state
   their own versions and ratification dates in their headers.

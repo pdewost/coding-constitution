@@ -259,13 +259,13 @@ redactions:
     replacement: "'the author also ran it from a monthly fleet audit, not shipped'"
     why: "An unshipped script must not read as part of the kit. (2026-10-28)"
   - id: R40
-    pattern: "a backticked, dated private record name (DECISION_/PLAN_/NOTE_/AUDIT_/REFLECTION_...md)"
+    pattern: "a backticked, dated private record name (DECISION_/PLAN_/NOTE_/AUDIT_/REFLECTION_/SURVEY_/PROPOSAL_...md)"
     replacement: "the same, followed by '(private, not shipped)'"
     why: "Specs cite the author's records for provenance; marked in place. (2026-10-28) Scope: extracted files, backticked
           form only. The public_only adversarial_review/SKILL.md is marked by hand (as R24). Code comments and test fixtures
           that name records unbackticked are not rewritten; the README's provenance sentence covers them. (2026-10-29)"
   - id: R40b
-    pattern: "a backticked governance/NEOCORTEX/...md path that R40's dated-name form misses (a dated folder, a <date> placeholder)"
+    pattern: "a backticked governance/NEOCORTEX/...md or governance/_archive/...md path that R40's dated-name form misses (a dated folder, a <date> placeholder)"
     replacement: "the same, followed by '(private, not shipped)'"
     why: "Two such paths in the verify_gate SKILL.md changelog shipped unmarked in the v0.13.1 candidate (bundle review
           s220 F6, 2026-11-08). Runs after R40 and skips a path already marked."

@@ -280,8 +280,6 @@ def test_6_symlink_back_to_root_gives_one_row(ws):
     assert "Discovered 1 target(s)" in out
 
 
-# -- 7-10: green today, guarding against the fix breaking them -----------------------------------
-
 def test_6b_a_child_reached_by_an_alias_sorting_first_is_still_armed(ws):
     """ROOT/a -> ROOT/z, with ROOT/z/NEOCORTEX: the real folder must be the one kept, not the alias."""
     (ws / "z" / "NEOCORTEX").mkdir(parents=True)
@@ -295,6 +293,8 @@ def test_6b_a_child_reached_by_an_alias_sorting_first_is_still_armed(ws):
     print(rows)
     assert rows == sorted([str(ws), str(ws / "z")])
 
+
+# -- 7-10: green today, guarding against the fix breaking them -----------------------------------
 
 def test_7_installed_json_has_one_armed_row_and_verify_fires_has_a_row(ws):
     rc, out = install(ws, "--apply")

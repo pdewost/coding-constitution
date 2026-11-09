@@ -73,7 +73,7 @@ was already structurally permitted; this makes the specific key sanctioned rathe
 tolerated). Absence is not a violation — most projects will never need one.
 
 **`status_state` (optional, ratified 2026-09-11, `PLAN_neocortex_health_observables_2026-08-25.md` (private, not shipped)
-§2/§2.1, propagated via `SURVEY_lowpriority_backlog_wwhw_2026-09-11.md` item 21, option A —
+§2/§2.1, propagated via `SURVEY_lowpriority_backlog_wwhw_2026-09-11.md` (private, not shipped) item 21, option A —
 **format only**).** A file entry MAY carry a machine-readable `status_state` alongside its
 human-prose `status`. Four values, fixed vocabulary — **do not widen it**: `active` ·
 `shipped` · `superseded` · `resolved`. **Absent ⇒ `active`** (fail-safe default; the reverse
@@ -86,7 +86,7 @@ acts on, which is exactly the failure this field exists to prevent. Same posture
 **this ratifies the FORMAT only.** The originating project's own threshold/warning logic (byte
 counts, staleness windows, archivability rules built on top of these four values) is NOT part of
 this ratification and stays project-local — a project adopting `status_state` derives its own
-thresholds the way `PROPOSAL_manifest_claudemd_compression_2026-09-01.md`-style derivations do,
+thresholds the way `PROPOSAL_manifest_claudemd_compression_2026-09-01.md` (private, not shipped)-style derivations do,
 never imports another project's numbers. Unenforced fleet-wide (no validator change here); a
 project MAY build its own local tooling against it, as PROJECT-A's `scripts/neocortex_health.py`
 already does. Absence is not a violation — most projects will never need one.

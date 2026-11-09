@@ -39,7 +39,7 @@ PATTERNS = {
     # Some terms must be matched case-SENSITIVELY: when a codename's lowercase form is
     # ordinary vocabulary or a real identifier, case-folding it cries wolf on legitimate
     # code and prose. Mark those with the 'cs:' prefix in the terms file.
-    "local-database":      r"antigravity\.db|PROJECT-B_bill|\.sqlite\b",
+    "local-database":      r"antigravity\.db|\.sqlite\b",   # other private database names come from the terms file
 
     # --- CREDENTIALS. Added 2026-08-25 after the §5.5 panel defeated this gate.
     # The original seven patterns covered paths, names and codenames and NOTHING else:

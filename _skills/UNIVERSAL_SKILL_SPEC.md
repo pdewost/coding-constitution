@@ -1,7 +1,7 @@
 # UNIVERSAL SKILL SPECIFICATION (v2.0)
 
 **Status: v2.0 — RATIFIED 2026-06-10** with PAICodeConstitution-2026 (Art. 7).
-Supersedes v1.1 (archived: `governance/_archive/UNIVERSAL_SKILL_SPEC_v1.1.md`).
+Supersedes v1.1 (archived: `governance/_archive/UNIVERSAL_SKILL_SPEC_v1.1.md` (private, not shipped)).
 This file — `_skills/UNIVERSAL_SKILL_SPEC.md` — is the canonical location all
 consumers reference; it is **L4 reference data**: amended freely via git.
 
@@ -73,8 +73,8 @@ time; full SKILL.md only when the skill is selected.
   `_skills/`, parses frontmatter, **collects consumer evidence per kind**, and
   emits `index.json` + `SKILLS_INDEX.md` (name · version · kind · status ·
   description · consumer count). Consumer evidence by kind — `library`: real
-  imports grepped across the workspace; `procedure`: invocation records and
-  CLAUDE.md usage notes; `snippets`: provenance markers (§5.5) grepped in
+  imports grepped across the workspace; `procedure`: shown as `n/a (invoked, not
+  imported)` when the code-consumer count is 0 (counting invocation records and usage notes is **not yet built**); `snippets`: provenance markers (§5.5) grepped in
   project code. Without per-kind evidence, two of three kinds would count
   zero consumers forever and §6 would auto-archive them wrongly.
 - Hand-maintained skill registries are **forbidden** — in constitutions, in
@@ -83,13 +83,15 @@ time; full SKILL.md only when the skill is selected.
 - A session-start hook (per-harness adapter) injects the one-screen index
   (**≤40 lines**; `archived` skills excluded from the default view).
 - Registration of a new skill = run `build_index.py`. Nothing else.
-- The index generator FAILS loudly on: missing frontmatter, missing SKILL.md,
+- The index generator FAILS loudly on: missing frontmatter,
   version in frontmatter ≠ version in title line (and ≠ `metadata.json` version
   for skills that ship one). "Fails loudly" = the mismatch is always printed to
   stderr naming the offending field; under `--strict` it also exits non-zero.
-  An `active` skill with failing tests is **demoted to a flagged state in the
-  index** (visible to every session) — it does not fail the build; one broken
-  skill must never block fleet-wide registration.
+  A folder with no SKILL.md is skipped without a message. **Not yet built:** a
+  loud failure for that case, and the rule that an `active` skill with failing
+  tests is demoted to a flagged state in the index (the generator reads no test
+  results). When built, it must not fail the build; one broken skill must never
+  block fleet-wide registration.
 
 > **Footgun — manual consumer-count greps UNDERCOUNT on the author's machine.** `_skills/*`
 > is `.gitignore`'d (only `build_index.py` is tracked; `index.json`,
