@@ -308,12 +308,21 @@ class TestProjectScratchDirIsExempt:
 
 
 class TestVerifyArmed:
-    def test_verify_armed_reads_from_project_not_cwd(self, tmp_path):
+    def test_verify_armed_reads_from_project_not_cwd(self, tmp_path, monkeypatch):
         import sys
         import pathlib
+        import importlib.util
         sys.path.insert(0, str(pathlib.Path(__file__).parent))
         import stop_closeout_gate
-        
+        # GF-1: the receipt checker loads only from approved bytes; point the gate at a fixture install whose list covers them
+        from test_vg_support import Fx
+        fx = Fx(armed=False)
+        spec = importlib.util.spec_from_file_location("_hs_armed", fx.hooks / "hook_support.py")
+        hs = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hs)
+        monkeypatch.setattr(stop_closeout_gate, "ROOT", fx.root)
+        monkeypatch.setattr(stop_closeout_gate, "_hs", hs)
+
         ws = tmp_path / "ws"
         proj = ws / "proj"
         (proj / "NEOCORTEX").mkdir(parents=True)
@@ -448,9 +457,9 @@ class TestBashEditDetection:
         removed the path from `edited_since_verify`. Post-fix: `rm` clears it, so the
         session stays silent with nothing left to verify."""
         hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
-        _write_transcript(transcript, [
-            ("Write", {"file_path": self.REAL_PY, "content": "print(1)"}),
-            ("Bash", {"command": f'rm -f "{self.REAL_PY}"'}),
+        _write_transcript_with_errors(transcript, [   # v0.8 S-3: an rm or a browser check clears only on a real ok result
+            ("Write", {"file_path": self.REAL_PY, "content": "print(1)"}, False),
+            ("Bash", {"command": f'rm -f "{self.REAL_PY}"'}, False),
         ])
         r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
         assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
@@ -477,9 +486,9 @@ class TestBashEditDetection:
         (M-13's own detection path, not the Edit/Write/NotebookEdit branch), then
         removed via a separate Bash `rm` — must also clear."""
         hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
-        _write_transcript(transcript, [
-            ("Bash", {"command": f"cat > \"{self.REAL_PY}\" << 'EOF'\nprint('x')\nEOF"}),
-            ("Bash", {"command": f'rm "{self.REAL_PY}"'}),
+        _write_transcript_with_errors(transcript, [   # v0.8 S-3: an rm or a browser check clears only on a real ok result
+            ("Bash", {"command": f"cat > \"{self.REAL_PY}\" << 'EOF'\nprint('x')\nEOF"}, False),
+            ("Bash", {"command": f'rm "{self.REAL_PY}"'}, False),
         ])
         r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
         assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
@@ -567,9 +576,9 @@ class TestBrowserVerificationClearsWindow:
 
     def test_console_check_clears_the_window(self, tmp_path):
         hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
-        _write_transcript(transcript, [
-            ("Edit", {"file_path": self.REAL_HTML}),
-            ("mcp__Claude_Browser__read_console_messages", {"onlyErrors": True}),
+        _write_transcript_with_errors(transcript, [   # v0.8 S-3: an rm or a browser check clears only on a real ok result
+            ("Edit", {"file_path": self.REAL_HTML}, False),
+            ("mcp__Claude_Browser__read_console_messages", {"onlyErrors": True}, False),
         ])
         r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
         assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
@@ -578,9 +587,9 @@ class TestBrowserVerificationClearsWindow:
 
     def test_javascript_eval_clears_the_window(self, tmp_path):
         hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
-        _write_transcript(transcript, [
-            ("Edit", {"file_path": self.REAL_HTML}),
-            ("mcp__Claude_Browser__javascript_tool", {"action": "javascript_exec", "text": "1+1"}),
+        _write_transcript_with_errors(transcript, [   # v0.8 S-3: an rm or a browser check clears only on a real ok result
+            ("Edit", {"file_path": self.REAL_HTML}, False),
+            ("mcp__Claude_Browser__javascript_tool", {"action": "javascript_exec", "text": "1+1"}, False),
         ])
         r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
         assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"
@@ -589,9 +598,9 @@ class TestBrowserVerificationClearsWindow:
 
     def test_screenshot_clears_the_window(self, tmp_path):
         hook, ws, proj, transcript = _fixture(tmp_path, WITHIN)
-        _write_transcript(transcript, [
-            ("Edit", {"file_path": self.REAL_HTML}),
-            ("mcp__Claude_Browser__computer", {"action": "screenshot"}),
+        _write_transcript_with_errors(transcript, [   # v0.8 S-3: an rm or a browser check clears only on a real ok result
+            ("Edit", {"file_path": self.REAL_HTML}, False),
+            ("mcp__Claude_Browser__computer", {"action": "screenshot"}, False),
         ])
         r = _run_hook(hook, cwd=proj, transcript=transcript, project_dir_env=proj)
         assert r.returncode == 0, f"hook crashed: {r.stderr[:400]}"

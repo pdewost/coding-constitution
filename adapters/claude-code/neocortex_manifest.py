@@ -299,7 +299,8 @@ def _oversized_files(nc_dir: Path) -> list[str]:
     result = []
     try:
         for entry in nc_dir.iterdir():
-            if entry.is_file():
+            # NEOCORTEX_SPEC §2 "MANIFEST.json excepted": exempt from the 64 KB data rule.
+            if entry.is_file() and entry.name != "MANIFEST.json":
                 try:
                     size = entry.stat().st_size
                     if size > DATA_MAX_BYTES:
@@ -595,6 +596,34 @@ def regenerate(project_dir: Path) -> int:
 
 # ── Scaffold helper (used by project_scaffold) ─────────────────────────────────
 
+def _status_scaffold(project_name: str, first_action: str) -> str:
+    """STATUS.md with the five sections NEOCORTEX_SPEC §2 requires, in order."""
+    return f"""\
+# {project_name} — Status
+*Last updated: {TODAY}*
+
+## What this project is
+[≤5 lines: one-paragraph purpose statement]
+
+## Current phase
+[One line + date stamp, e.g.: "S0 — scaffolding — {TODAY}"]
+
+## Invariants
+1. [Add invariants as they are established — cite INCIDENT/DECISION doc that created each]
+
+## Next actions
+1. {first_action}
+2. Define first implementation milestone
+3. [Add more as needed — max 5, priority-ordered, each independently actionable cold]
+
+## Pointers
+- NEOCORTEX_SPEC: see your regime's NEOCORTEX_SPEC.md (e.g. spec/ or governance/)
+- Constitution: `PAICodeConstitution-2026.md`
+- Cold-start read order: MANIFEST.json → STATUS.md → active plans
+- Test command: [add when tests exist]
+"""
+
+
 def scaffold_neocortex(project_dir: Path, project_name: str, dry_run: bool = False) -> list[str]:
     """
     Create a spec-compliant NEOCORTEX/ skeleton at project birth.
@@ -630,30 +659,7 @@ def scaffold_neocortex(project_dir: Path, project_name: str, dry_run: bool = Fal
         ensure_ascii=False,
     ) + "\n"
 
-    status_content = f"""\
-# {project_name} — Status
-*Last updated: {TODAY}*
-
-## What this project is
-[≤5 lines: one-paragraph purpose statement]
-
-## Current phase
-[One line + date stamp, e.g.: "S0 — scaffolding — {TODAY}"]
-
-## Invariants
-1. [Add invariants as they are established — cite INCIDENT/DECISION doc that created each]
-
-## Next actions
-1. Fill in PROJECT_BRIEF.md (Goal + Tech Stack)
-2. Define first implementation milestone
-3. [Add more as needed — max 5, priority-ordered, each independently actionable cold]
-
-## Pointers
-- NEOCORTEX_SPEC: see your regime's NEOCORTEX_SPEC.md (e.g. spec/ or governance/)
-- Constitution: `PAICodeConstitution-2026.md`
-- Cold-start read order: MANIFEST.json → STATUS.md → active plans
-- Test command: [add when tests exist]
-"""
+    status_content = _status_scaffold(project_name, "Fill in PROJECT_BRIEF.md (Goal + Tech Stack)")
 
     journal_content = f"""\
 # {project_name} — Journal
@@ -745,18 +751,12 @@ def init(project_dir: Path) -> int:
     name = project_dir.name
     nc.mkdir(parents=True)
     (nc / "STATUS.md").write_text(
-        f"# {name} — NEOCORTEX Status\n\n"
-        "<!-- Bounded rebase block (NEOCORTEX_SPEC §2). Overwritten in place every session. "
-        "Keep it under its size bound. -->\n\n"
-        "## SINGLE NEXT ACTION\n\n"
-        "_Replace this with the one thing a cold-start agent should do next, with the exact "
-        "command and the file it touches._\n\n"
-        "## What this project is\n\n_One paragraph. Assume no prior context._\n\n"
-        "## Invariants\n\n_Things that must stay true. State each so a script could check it._\n\n"
-        "## Open work, in priority order\n\n1. _…_\n", encoding="utf-8")
+        _status_scaffold(name, "Replace this with the one thing a cold-start agent should do next, "
+                               "with the exact command and the file it touches"),
+        encoding="utf-8")
     (nc / "JOURNAL.md").write_text(
         f"# JOURNAL — {name}\n\n"
-        "> Append one entry per working session: decisions and their reasons, consents "
+        "> Prepend one entry per working session, newest first: decisions and their reasons, consents "
         "recorded BEFORE the operations they authorise. Never delete; rotate to _archive/ "
         "when it approaches its size bound.\n", encoding="utf-8")
     (nc / "MANIFEST.json").write_text(

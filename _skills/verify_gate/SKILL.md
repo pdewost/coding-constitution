@@ -1,9 +1,9 @@
 ---
 name: verify_gate
-version: 0.3.1
+version: 0.4.0
 kind: library
 status: active
-description: Harness- & coder-neutral VERIFY-GATE — validates an independently-produced, externally-attested verdict (LLM, subagent, or human) and blocks only when independence is anchored OUTSIDE the producing agent; change-set-bound receipts, spent once by the CLI under a locked, fail-closed ledger.
+description: Harness- & coder-neutral VERIFY-GATE — validates an independently-produced, externally-attested verdict (LLM, subagent, or human) and blocks only when independence is anchored OUTSIDE the producing agent; v2 receipts that record how they were earned (re-derived from the verdict and the attestation at every validation), bound to the change-set, spent once by the CLI under a locked, fail-closed, per-project ledger.
 ---
 
 DISPATCH-CLASS: adversarial@high
@@ -24,7 +24,7 @@ producing agent's address space**:
 
 | Anchor | Blocking? |
 |---|---|
-| `harness_subagent` (a fresh subagent the agent can't forge), `stateless_api`, `ci`, `human_external` | **mechanical — can block** |
+| `harness_subagent` (a fresh subagent spawned outside the producing agent's context), `stateless_api`, `ci` (a CI run is anchored by its own id, never by an environment variable), `human_external` | **mechanical — can block** |
 | `self` / `same_context` / `human_self` (inside the agent's reach) | **advisory only** |
 
 The load-bearing rule: a verdict can BLOCK only when its **attestation** (written out-of-band
@@ -39,16 +39,17 @@ doesn't help.
   · `3` unanchored (blocking required but advisory-only) · `4` judge-unreachable · `5` tamper
   (self-asserted attestation inside the verdict) · `6` receipt invalid.
 - `verify_gate.py` — the CLI every adapter shells:
-  `verify_gate.py --verdict V --attestation A [--require-blocking] [--changed f… --receipt R --ledger L] [--write-receipt R] [--override "<reason>"] [--judge-unreachable]`
+  `verify_gate.py --verdict V --attestation A [--require-blocking] [--changed f… --write-receipt R] [--override "<reason>"] [--judge-unreachable]`, or `verify_gate.py --changed f… --receipt R` (validate and spend a receipt). The receipt mode serves **armed roots** only (a project holding `NEOCORTEX/` and `.verify/armed`): the ledger is always `<project>/.verify/_consumed_nonces.json`, derived from the changed files by `receipt.project_root`, and the CLI takes no ledger option. Exit 6 with a `decision` of "no project root", "ambiguous project root" or "armed state unreadable" when no single armed root can be named. A relative `--changed` path is joined to the cwd with a plain separator join (no folding of `./` or `..`); issuance refuses a path validation would refuse (a link in any component, a FIFO, a folder, a hard-linked file, a file over 64 MiB or one that changes while it is read): exit 6, no receipt.
 - `review_runner.run_review(...)` — the orchestrator: seals the bundle, spawns the judge,
   **writes the attestation out-of-band**. `harness_subagent | stateless_llm | human` backends;
   `judge_fn` injected (the real model call / harness spawn / form).
-- `receipt.py` — `write_receipt` / `validate_receipt` / `validate_and_consume` / `consume`: a VERIFY-RECEIPT
-  bound to a **change-set hash** and **time-fresh** (a `ts` over 300 s ahead is invalid). **Single-use: the CLI
+- `receipt.py` — `write_receipt` / `validate_receipt` / `validate_and_consume` / `consume` / `project_root`: a v2 VERIFY-RECEIPT
+  bound to a **change-set hash** and **time-fresh** (a `ts` over 300 s ahead is invalid); it records `verdict_ref`,
+  `verdict_sha256`, `attestation_ref` and `attestation_sha256`, and validation re-derives the decision from those two files
+  (hashes equal, `core.evaluate` PASS, no block finding, block-eligible). **Single-use: the CLI
   spends it through `verify_gate.py --receipt`; the hooks check without spending, so inside its window a receipt
-  satisfies every Stop over the same unchanged change-set until it is spent once, by the CLI included: for a
-  receipt stored in `<project>/.verify/` the CLI spends into the ledger the Stop gate reads, and the next Stop
-  refuses it.** `validate_and_consume` validates and spends under an exclusive `fcntl.flock` on a sidecar
+  satisfies every Stop over the same unchanged change-set until it is spent once, by the CLI included: the CLI spends
+  into `<project>/.verify/_consumed_nonces.json`, the ledger the Stop gate reads, and the next Stop refuses it.** `validate_and_consume` validates and spends under an exclusive `fcntl.flock` on a sidecar
   `<ledger>.lock` and writes the ledger atomically (temp file, `fsync`, `os.replace`, folder `fsync`), so of
   concurrent runs on one receipt at most one passes. The ledger fails closed: absent = empty; present but
   unreadable or malformed = every receipt invalid, never rewritten (move it aside to restore service, which
@@ -91,7 +92,9 @@ produce_review.py --artifact X --evidence-json E.json --backend stateless_llm \
   is the in-session adapter + a `--no-verify`-bypassable `pre-commit` (defence-in-depth).
 - Human independence is **by identity** (an external producer id), not context-denial.
 - Receipt forgery is possible on a local box — it raises the bar from "echo a magic string"
-  to "produce a real attested verdict + matching-change-set receipt," not a crypto guarantee.
+  to "produce a real attested verdict + matching-change-set receipt," not a crypto guarantee. Honest limits of a v2 receipt:
+  on a local box a determined agent can still forge the whole evidence set (attestation, verdict, receipt), and single use is per project root: moving the ledger aside reopens every spent nonce. R-1 to R-4 close the accidental paths named above; they do not raise the cryptographic floor.
+  A receipt does not prove what was reviewed: a genuine clean verdict and attestation, whatever they reviewed and however old, can be bound to any later change-set, any number of times, and an edit made while a review runs is not detected (planned: receipt-v3). Validation reads the changed files one after another, so an edit made during validation can pass. The Stop hook sees edits as the transcript spells them: a write under a scratch or temp exemption (an alias or a `..` escape into the project included), a `cd` inside a command, an unexpanded variable, or a link changed before the turn ends can escape the armed check. The hooks' import guard does not authenticate modules already in sys.modules; it refuses only an unverified module cached under a scripts-file name whose file lies in the scripts folder. The CLIs have no import guard.
 
 ## Status / consumers
 
@@ -105,6 +108,22 @@ Next (founder-gated): per-harness adapters + the advisory fleet push; the change
 
 ## Changelog
 
+- **0.4.0** (2026-11-10; `governance/NEOCORTEX/PLAN_verify_gate_receipt_v2_2026-11-02.md` (private, not shipped) v0.7, R-1 to R-5; consumers:
+  `governance/NEOCORTEX/NOTE_verify_gate_0.4.0_consumers_<date>.md` (private, not shipped)). Schema `verify_gate.receipt.v2` adds `verdict_ref` and
+  `attestation_sha256` (refs absolute, `realpath`-normalised at issuance); API: `receipt.project_root`, `receipt.qualify_path`,
+  `receipt.UnsafeFile` added; `changeset_sha256` raises `UnsafeFile`. CLI: `--ledger` removed; the receipt mode serves armed
+  roots only; `produce_review.produce` returns `receipt_refused` (a reason) when it withholds a receipt. Every shape that turns
+  invalid (all return `(False, reason)` without consuming; the CLI exits 6): a **v1 receipt** ("re-issue under v2"); a verdict or
+  attestation whose bytes changed since issuance (`verdict_sha256` / `attestation_sha256` mismatch, a whitespace re-serialisation
+  included); a decision that no longer re-derives (a HIGH refutation, a producer mismatch, no external anchor); a `verdict_ref`
+  or `attestation_ref` that is missing, a symlink (or behind a symlinked component), a FIFO, hard-linked, over 64 MiB, or changed
+  while being read; a changed path that is a symlink, behind a symlinked component (`link/../x.py` included), a FIFO, a folder, a
+  hard link, over 64 MiB or changed while read; a ledger that is a symlink or FIFO or reached through one; a receipt copied or
+  spent under another ledger (replay; the ledger is the project's); changed paths with **no project root**, an **ambiguous
+  project root** (two armed roots) or an **armed state unreadable** (a loop, a permission error, a link chain over 40, a
+  wrong-type `NEOCORTEX`, `.verify` or `armed`). At issuance the same shapes raise `UnsafeFile`: no receipt, exit 6. A receipt is
+  no longer issued for a self-attested HIGH refutation or an un-anchored clean verdict, and `CI=1` (or `GITHUB_ACTIONS`,
+  `GITLAB_CI`, `BUILDKITE`) no longer anchors a review as `ci`. The CLI's `receipt_valid` line says the receipt is spent.
 - **0.3.1** (2026-11-07; `governance/NEOCORTEX/_prep/fs1b_plan_v01_approved_text_2026-11-07/PLAN_verify_gate_031_s218_fixes_v0.1_approved_text.md` (private, not shipped),
   the nine LOW findings of seat s218, VG-1 to VG-9). Receipt format, `validate_receipt` signature and read-only
   contract, and the CLI exit codes are unchanged. Outcome changes, all toward invalid or toward not hanging: a

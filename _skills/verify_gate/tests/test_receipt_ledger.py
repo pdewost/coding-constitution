@@ -91,15 +91,27 @@ sys.exit(verify_gate.main(sys.argv[7:]))
 '''
 
 
+_VERDICT = {"schema": "verify_gate.verdict.v1", "artifact": "art", "drafter_id": "author", "producer_id": "reviewer",
+            "lenses": [{"lens": "correctness", "verdict": "holds", "probe": "checked", "findings": []}]}
+_ATT = {"schema": "verify_gate.attestation.v1", "anchor_kind": "harness_subagent", "anchor_id": "sub-123",
+        "attestor": "orchestrator", "producer_id": "reviewer", "context_isolated": True}
+
+
 def _setup(tmp_path):
+    """0.4.0 (R-2/R-3): tmp_path is a marked project root (NEOCORTEX/ + .verify/armed); the verdict and the attestation are
+    real, anchored and clean; the ledger is the project's own, which the CLI derives from the changed files."""
+    (tmp_path / "NEOCORTEX").mkdir(exist_ok=True)
+    (tmp_path / ".verify").mkdir(exist_ok=True)
+    (tmp_path / ".verify" / "armed").write_text("")
     code = tmp_path / "code.py"; code.write_text("x = 1\n")
-    verdict = tmp_path / "verdict.json"; verdict.write_text("{}")
-    return code, verdict, tmp_path / "ledger.json"
+    verdict = tmp_path / "verdict.json"; verdict.write_text(json.dumps(_VERDICT))
+    (tmp_path / "attestation.json").write_text(json.dumps(_ATT))
+    return code, verdict, tmp_path / ".verify" / "_consumed_nonces.json"
 
 
 def _receipt(tmp_path, code, verdict, name="receipt.json", **override):
     rec = R.write_receipt(changed_paths=[str(code)], verdict_path=str(verdict), gate_exit=0,
-                          attestation_ref="att.json").as_dict()
+                          attestation_ref=str(tmp_path / "attestation.json")).as_dict()
     rec.update(override)
     for k in [k for k, v in override.items() if v is _DROP]:
         del rec[k]
@@ -111,7 +123,7 @@ _DROP = object()
 
 
 def _cli(receipt_path, code, ledger):
-    return ["--receipt", str(receipt_path), "--changed", str(code), "--ledger", str(ledger)]
+    return ["--receipt", str(receipt_path), "--changed", str(code)]   # R-3: no --ledger; the project's ledger is derived
 
 
 def _spawn(tmp_path, argvs, *, forced=True):
@@ -199,7 +211,8 @@ def test_t5_replace_failure_leaves_the_ledger_unchanged_and_no_temp(tmp_path, mo
     monkeypatch.setattr(os, "replace", boom)
     assert verify_gate.main(_cli(rp, code, ledger)) == RECEIPT_INVALID
     assert ledger.read_bytes() == before
-    assert set(os.listdir(tmp_path)) - listing <= {"ledger.json.lock"}, os.listdir(tmp_path)
+    assert set(os.listdir(tmp_path)) - listing == set(), os.listdir(tmp_path)
+    assert [f for f in os.listdir(tmp_path / ".verify") if f.endswith(".tmp")] == []
 
 
 def test_t5b_folder_fsync_failure_after_replace_is_distinct_and_spends(tmp_path, monkeypatch):
@@ -361,32 +374,43 @@ def test_t10_deeply_nested_ledger_is_invalid_without_traceback(tmp_path):
     assert ledger.read_bytes() == before
 
 
-def test_t10_ledger_under_a_regular_file_parent_exits_6_without_traceback(tmp_path):
+def test_t10_ledger_under_a_regular_file_parent_is_refused(tmp_path):
+    """The function half: a ledger whose parent is a regular file is never consumed into."""
     code, verdict, _ledger = _setup(tmp_path)
     (tmp_path / "afile").write_text("x")
     ledger = tmp_path / "afile" / "sub" / "ledger.json"
     rp, rec = _receipt(tmp_path, code, verdict)
     ok, why = R.validate_and_consume(rec, changed_paths=[str(code)], ledger_path=str(ledger))
     assert not ok, why
-    r = _run([sys.executable, VG, *_cli(rp, code, ledger)], 30)
+
+
+def test_t10_cli_with_a_verify_folder_that_is_a_regular_file_exits_6_without_traceback(tmp_path):
+    """The CLI half (Q4, s238): R-3 removed `--ledger`, so this no longer tests a ledger path. It tests the project the CLI
+    derives its ledger from: a `.verify` that is a regular file (no marker, no ledger) is an unreadable armed state."""
+    code, verdict, _ledger = _setup(tmp_path)
+    rp, rec = _receipt(tmp_path, code, verdict)
+    os.unlink(tmp_path / ".verify" / "armed")
+    os.rmdir(tmp_path / ".verify")
+    (tmp_path / ".verify").write_text("x")
+    r = _run([sys.executable, VG, *_cli(rp, code, _ledger)], 30)
     assert r.returncode == RECEIPT_INVALID and "Traceback" not in r.stderr, (r.returncode, r.stderr[-300:])
+    assert json.loads(r.stdout)["decision"] == "armed state unreadable", r.stdout
 
 
 # ---- T11 / T12: nothing blocks forever (VG-5, B4) ---------------------------------------------------------------
 def test_t11_fifo_in_changed_does_not_hang(tmp_path):
-    import hashlib
     code, verdict, ledger = _setup(tmp_path)
     fifo = tmp_path / "pipe"
     os.mkfifo(fifo)
     rp, _rec = _receipt(tmp_path, code, verdict)
-    r = _run([sys.executable, VG, "--receipt", str(rp), "--changed", str(fifo), "--ledger", str(ledger)], 10)
+    r = _run([sys.executable, VG, "--receipt", str(rp), "--changed", str(fifo)], 10)
     assert r.returncode == RECEIPT_INVALID and "Traceback" not in r.stderr, (r.returncode, r.stderr[-300:])
-    # the digest of a non-regular file is the marker, computed without reading it
-    h = hashlib.sha256()
-    h.update(str(fifo).encode() + b"\0" + b"<non-regular>" + b"\0")
-    r2 = _run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import receipt; "
-               "print(receipt.changeset_sha256([sys.argv[2]]))", SCRIPTS, str(fifo)], 10)
-    assert r2.stdout.strip() == h.hexdigest(), (r2.stdout, r2.stderr[-300:])
+    # PLAN v0.7 (R-2, s239 H-9) supersedes FS-1's digest assertion: a FIFO is REFUSED (UnsafeFile) under an external deadline,
+    # it is no longer hashed as the marker `<non-regular>`.
+    r2 = _run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import receipt\n"
+               "try:\n    receipt.changeset_sha256([sys.argv[2]]); print('hashed')\n"
+               "except receipt.UnsafeFile:\n    print('refused')", SCRIPTS, str(fifo)], 10)
+    assert r2.stdout.strip() == "refused", (r2.stdout, r2.stderr[-300:])
 
 
 _HOLDER = r'''
@@ -444,7 +468,7 @@ def test_t13_lock_file_replaced_while_held_refuses_the_write(tmp_path, monkeypat
     with pytest.raises(R.LedgerError):
         R.consume("f" * 32, str(ledger))
     assert ledger.read_bytes() == before
-    assert [f for f in os.listdir(tmp_path) if f.endswith(".tmp")] == []
+    assert [f for f in os.listdir(tmp_path / ".verify") if f.endswith(".tmp")] == []
     # control: with no swap the same call spends the nonce
     monkeypatch.setattr(R, "_write_ledger", real_write)
     assert R.validate_and_consume(rec, changed_paths=[str(code)], ledger_path=str(ledger))[0] is True
@@ -455,8 +479,8 @@ def test_t14_symlinked_ledger_folder_is_refused_and_nothing_is_written(tmp_path)
     code, verdict, _l = _setup(tmp_path)
     target = tmp_path / "target"
     target.mkdir()
-    os.symlink(target, tmp_path / ".verify")
-    ledger = tmp_path / ".verify" / "ledger.json"
+    os.symlink(target, tmp_path / "vlink")
+    ledger = tmp_path / "vlink" / "ledger.json"
     _rp, rec = _receipt(tmp_path, code, verdict)
     ok, why = R.validate_and_consume(rec, changed_paths=[str(code)], ledger_path=str(ledger))
     assert not ok, why
@@ -465,25 +489,19 @@ def test_t14_symlinked_ledger_folder_is_refused_and_nothing_is_written(tmp_path)
     assert os.listdir(target) == []
 
 
-def test_t14_dotdot_through_a_symlink_puts_the_temp_in_the_ledgers_own_folder(tmp_path, monkeypatch):
+def test_t14_dotdot_through_a_symlink_is_refused_since_r2(tmp_path):
+    """FS-1 T14b expected a ledger reached through `jump/..` (a symlink component) to be USED, its temp in the ledger's own
+    folder. Receipt-v2 R-2 reads the ledger through the no-follow walk (a link in ANY component is refused), so the same
+    path is now refused and nothing is written. Fixture changed to the new rule (reported to the caller)."""
     code, verdict, _l = _setup(tmp_path)
     home = tmp_path / "elsewhere"
     (home / "sub").mkdir(parents=True)
     os.symlink(home / "sub", tmp_path / "jump")
-    ledger = f"{tmp_path}/jump/../ledger.json"          # resolves to <elsewhere>/ledger.json
+    ledger = f"{tmp_path}/jump/../ledger.json"
     _rp, rec = _receipt(tmp_path, code, verdict)
-    opened, real_os_open = [], os.open
-
-    def rec_open(path, flags, *a, **k):
-        opened.append((os.fspath(path), flags))
-        return real_os_open(path, flags, *a, **k)
-    monkeypatch.setattr(os, "open", rec_open)
     ok, why = R.validate_and_consume(rec, changed_paths=[str(code)], ledger_path=ledger)
-    monkeypatch.undo()
-    assert ok, why
-    temps = [p for p, f in opened if f & os.O_EXCL]
-    assert len(temps) == 1 and os.path.dirname(os.path.realpath(temps[0])) == os.path.realpath(home), temps
-    assert json.loads((home / "ledger.json").read_text()) == [rec["nonce"]]
+    assert not ok and "unreadable" in why, why
+    assert not (home / "ledger.json").exists() and os.listdir(home / "sub") == []
 
 
 # ---- T15: F_FULLFSYNC on Darwin (VG-8, B7) ----------------------------------------------------------------------

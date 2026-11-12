@@ -461,7 +461,7 @@ def test_s4_43_browser_inspection_does_not_clear_non_web_code(ws):
     assert not blocked(run(ws, t))
 
 
-def test_s4_55_a_long_transcript_is_read_from_its_tail(ws):
+def test_s4_55_a_transcript_over_the_file_cap_gives_the_incomplete_block(ws):   # v0.8 S-4/S-5: re-pointed from the TRUNCATED advisory
     t = T(ws).prompt()
     for i in range(300):
         t.bash(f"echo filler {i}", "x" * 50)
@@ -473,7 +473,8 @@ def test_s4_55_a_long_transcript_is_read_from_its_tail(ws):
                        input=json.dumps({"transcript_path": str(tp)}), capture_output=True, text=True,
                        cwd=str(ws), env=env, timeout=30)
     o = json.loads(r.stdout)
-    assert o.get("decision") == "block" and "truncated" in o.get("systemMessage", "").lower(), o
+    assert o.get("decision") == "block" and "TRANSCRIPT READ INCOMPLETE" in o.get("reason", ""), o
+    assert "truncated" not in o.get("systemMessage", "").lower(), o
 
 
 def test_s4_56_journal_bound_reaches_the_edited_project_from_the_root(ws):

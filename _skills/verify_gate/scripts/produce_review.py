@@ -63,18 +63,26 @@ def produce(*, artifact: str, evidence: list[dict], drafter_id: str, producer_id
     attestation = core.load_json(res["attestation_path"])
     d = core.evaluate(verdict, attestation, require_blocking=require_blocking)
 
-    receipt_path = None
-    if d.exit_code == core.ExitCode.PASS and changed_paths:
-        rec = receipt_mod.write_receipt(changed_paths=changed_paths, verdict_path=res["verdict_path"],
-                                        gate_exit=0, attestation_ref=res["attestation_path"])
-        receipt_path = os.path.join(outdir, "receipt.json")
-        with open(receipt_path, "w", encoding="utf-8") as fh:
-            json.dump(rec.as_dict(), fh, indent=2)
+    receipt_path, receipt_refused = None, None
+    if d.exit_code == core.ExitCode.PASS and changed_paths and receipt_mod.issuable(verdict, attestation)[0]:  # R-1
+        try:
+            # R-2: one path-qualification rule (absolute as spelled; relative joined to the cwd, no folding), and issuance
+            # reads every file the way validation does: an UnsafeFile means no receipt, with its reason.
+            rec = receipt_mod.write_receipt(changed_paths=[receipt_mod.qualify_path(p) for p in changed_paths],
+                                            verdict_path=res["verdict_path"], gate_exit=0,
+                                            attestation_ref=res["attestation_path"])
+        except receipt_mod.UnsafeFile as e:
+            receipt_refused = f"no receipt issued: {e}"
+        else:
+            receipt_path = os.path.join(outdir, "receipt.json")
+            with open(receipt_path, "w", encoding="utf-8") as fh:
+                json.dump(rec.as_dict(), fh, indent=2)
 
     return {"exit": d.exit_code, "decision": _name(d.exit_code),
             "verdict_path": res["verdict_path"], "attestation_path": res["attestation_path"],
             "receipt_path": receipt_path, "blocking": d.blocking, "advisory": d.advisory,
-            "block_findings": d.block_findings, "anchor_kind": d.anchor_kind, "reasons": d.reasons}
+            "block_findings": d.block_findings, "anchor_kind": d.anchor_kind,
+            "reasons": d.reasons + ([receipt_refused] if receipt_refused else []), "receipt_refused": receipt_refused}
 
 
 def _name(code: int) -> str:

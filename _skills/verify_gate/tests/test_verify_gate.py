@@ -130,9 +130,10 @@ def test_human_prose_only_is_demoted_no_block():
 def test_receipt_roundtrip_and_changeset_binding(tmp_path):
     f = tmp_path / "code.py"; f.write_text("x = 1\n")
     vfile = tmp_path / "verdict.json"; vfile.write_text(json.dumps(mk_verdict()))
+    afile = tmp_path / "att.json"; afile.write_text(json.dumps(mk_att()))
     ledger = str(tmp_path / "ledger.json")
     rec = R.write_receipt(changed_paths=[str(f)], verdict_path=str(vfile), gate_exit=0,
-                          attestation_ref="att.json")
+                          attestation_ref=str(afile))
     ok, why = R.validate_receipt(rec.as_dict(), changed_paths=[str(f)], ledger_path=ledger)
     assert ok, why
     # edit the file => change-set hash flips => receipt no longer valid
@@ -144,9 +145,10 @@ def test_receipt_roundtrip_and_changeset_binding(tmp_path):
 def test_receipt_single_use_replay(tmp_path):
     f = tmp_path / "code.py"; f.write_text("x = 1\n")
     vfile = tmp_path / "verdict.json"; vfile.write_text(json.dumps(mk_verdict()))
+    afile = tmp_path / "att.json"; afile.write_text(json.dumps(mk_att()))
     ledger = str(tmp_path / "ledger.json")
     rec = R.write_receipt(changed_paths=[str(f)], verdict_path=str(vfile), gate_exit=0,
-                          attestation_ref="att.json")
+                          attestation_ref=str(afile))
     ok, _ = R.validate_receipt(rec.as_dict(), changed_paths=[str(f)], ledger_path=ledger)
     assert ok
     R.consume(rec.nonce, ledger)

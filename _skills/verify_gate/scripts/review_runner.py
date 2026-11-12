@@ -69,9 +69,8 @@ def run_review(
 def _anchor_kind_for(backend: str, orchestrator_id: str, anchor_id: str) -> str:
     """Map the backend to an anchor kind HONESTLY. A backend that claims external anchoring
     but whose orchestrator is empty/unspecified is reported as 'self' (the gate then makes it
-    advisory). CI is detected from the environment, which an agent cannot mint."""
-    if _in_ci():
-        return "ci"
+    advisory). The environment is never consulted (R-4): any process can set CI=1, so a CI run anchors
+    as stateless_api or harness_subagent with its own id."""
     if backend == "stateless_llm" and anchor_id:
         return "stateless_api"
     if backend == "harness_subagent" and anchor_id and orchestrator_id:
@@ -82,6 +81,3 @@ def _anchor_kind_for(backend: str, orchestrator_id: str, anchor_id: str) -> str:
         return "human_external" if anchor_id else "human_self"
     return "self"
 
-
-def _in_ci() -> bool:
-    return any(os.environ.get(v) for v in ("CI", "GITHUB_ACTIONS", "GITLAB_CI", "BUILDKITE"))

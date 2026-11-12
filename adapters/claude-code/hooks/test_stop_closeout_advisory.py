@@ -311,26 +311,42 @@ def test_staleness_advisory_IS_NOT_SILENTLY_SWALLOWED_when_findings_exist(tmp_pa
 # proof: if the functions still read Path.cwd(), every test here would see the WRONG project
 # (or none) and fail, since pytest's actual cwd is wherever it was invoked from.
 
-def test_verify_project_root_resolves_from_the_edited_file_path(tmp_path):
+def _installed(tmp_path):
+    """The gate module with ROOT and its hook_support pointed at a fixture install whose approved list covers the
+    verify_gate scripts (as a landed install does): GF-1 loads the receipt checker only from approved bytes, and the
+    live tree's list is re-written only at a founder-visible landing. Returns (mod, hook_support module, fixture)."""
+    sys.path.insert(0, str(HOOK.parent))
+    from test_vg_support import Fx
+    fx = Fx(armed=False)
+    spec = importlib.util.spec_from_file_location("_hs_adv", fx.hooks / "hook_support.py")
+    hs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hs)
     mod = _load()
+    mod.ROOT, mod._hs = fx.root, hs
+    return mod, hs, fx
+
+
+def test_verify_project_root_resolves_from_the_edited_file_path(tmp_path):
+    mod, hs, fx = _installed(tmp_path)
     proj = _make_project(tmp_path, dirty=False)
+    (proj / ".verify").mkdir()
+    (proj / ".verify" / "armed").write_text("", encoding="utf-8")
     target = proj / "script.py"
     target.write_text("print('x')\n", encoding="utf-8")
-    assert mod._verify_project_root([str(target)]) == proj
+    assert mod._verify_project_root([str(target)], hs.vg_load(fx.root)) == (proj.resolve(), "ok")
 
 
 def test_verify_project_root_is_None_when_nothing_resolves(tmp_path):
-    """A bare, ungoverned directory (no CLAUDE.md/NEOCORTEX ancestor) must resolve to
-    nothing — not the nearest unrelated project, not a crash."""
-    mod = _load()
+    """A bare, ungoverned directory (no armed NEOCORTEX ancestor) must resolve to nothing, with the reason."""
+    mod, hs, fx = _installed(tmp_path)
     stray = tmp_path / "nowhere" / "file.py"
     stray.parent.mkdir(parents=True)
     stray.write_text("x\n", encoding="utf-8")
-    assert mod._verify_project_root([str(stray)]) is None
+    assert mod._verify_project_root([str(stray)], hs.vg_load(fx.root)) == (None, "no project root")
 
 
 def test_verify_armed_true_at_the_resolved_project_ROOT_not_cwd(tmp_path):
-    mod = _load()
+    mod, hs, fx = _installed(tmp_path)
     proj = _make_project(tmp_path, dirty=False)
     target = proj / "script.py"
     target.write_text("print('x')\n", encoding="utf-8")
@@ -340,7 +356,7 @@ def test_verify_armed_true_at_the_resolved_project_ROOT_not_cwd(tmp_path):
 
 
 def test_verify_armed_false_when_no_marker(tmp_path):
-    mod = _load()
+    mod, hs, fx = _installed(tmp_path)
     proj = _make_project(tmp_path, dirty=False)
     target = proj / "script.py"
     target.write_text("print('x')\n", encoding="utf-8")
@@ -348,7 +364,7 @@ def test_verify_armed_false_when_no_marker(tmp_path):
 
 
 def test_verify_armed_false_when_edited_files_resolve_to_no_project(tmp_path):
-    mod = _load()
+    mod, hs, fx = _installed(tmp_path)
     stray = tmp_path / "nowhere" / "file.py"
     stray.parent.mkdir(parents=True)
     stray.write_text("x\n", encoding="utf-8")
@@ -356,45 +372,54 @@ def test_verify_armed_false_when_edited_files_resolve_to_no_project(tmp_path):
 
 
 def _write_valid_receipt(root, changed_paths) -> None:
-    """A genuinely valid .verify/receipt.json, via the REAL receipt module — the same one
-    `_has_valid_receipt` imports — not a hand-rolled schema."""
+    """A genuinely valid v2 .verify/receipt.json, via the REAL receipt module (real verdict and attestation files,
+    anchored and clean) — not a hand-rolled schema."""
     sys.path.insert(0, str(ROOT / "_skills" / "verify_gate" / "scripts"))
     import receipt as receipt_mod  # noqa: E402
     vdir = Path(root) / ".verify"
     vdir.mkdir(exist_ok=True)
-    verdict_path = vdir / "verdict.json"
-    verdict_path.write_text('{"schema": "verify_gate.verdict.v1"}', encoding="utf-8")
+    (vdir / "armed").write_text("", encoding="utf-8")
+    verdict_path, att_path = vdir / "verdict.json", vdir / "attestation.json"
+    verdict_path.write_text(json.dumps({
+        "schema": "verify_gate.verdict.v1", "artifact": "a", "drafter_id": "author", "producer_id": "reviewer",
+        "lenses": [{"lens": "c", "verdict": "holds", "probe": "p", "findings": []}]}), encoding="utf-8")
+    att_path.write_text(json.dumps({
+        "schema": "verify_gate.attestation.v1", "anchor_kind": "harness_subagent", "anchor_id": "s",
+        "attestor": "orch", "producer_id": "reviewer", "context_isolated": True}), encoding="utf-8")
     rec = receipt_mod.write_receipt(
         changed_paths=[str(p) for p in changed_paths], verdict_path=str(verdict_path),
-        gate_exit=0, attestation_ref=str(vdir / "attestation.json"))
+        gate_exit=0, attestation_ref=str(att_path))
     (vdir / "receipt.json").write_text(json.dumps(rec.as_dict()), encoding="utf-8")
 
 
 def test_has_valid_receipt_true_for_a_real_receipt_at_the_resolved_root(tmp_path):
-    mod = _load()
+    mod, hs, fx = _installed(tmp_path)
     proj = _make_project(tmp_path, dirty=False)
     target = proj / "script.py"
     target.write_text("print('x')\n", encoding="utf-8")
     _write_valid_receipt(proj, [target])
-    assert mod._has_valid_receipt([str(target)], [str(target)]) is True
+    assert mod._has_valid_receipt([str(target)], [str(target)]) == (True, "receipt valid for the current change-set")
 
 
 def test_has_valid_receipt_false_when_absent(tmp_path):
-    mod = _load()
+    mod, hs, fx = _installed(tmp_path)
     proj = _make_project(tmp_path, dirty=False)
+    (proj / ".verify").mkdir()
+    (proj / ".verify" / "armed").write_text("", encoding="utf-8")
     target = proj / "script.py"
     target.write_text("print('x')\n", encoding="utf-8")
-    assert mod._has_valid_receipt([str(target)], [str(target)]) is False
+    assert mod._has_valid_receipt([str(target)], [str(target)]) == (False, "")
 
 
 def test_has_valid_receipt_false_when_the_changeset_no_longer_matches(tmp_path):
     """A receipt is bound to file CONTENT, not just presence — editing the file after the
     receipt was written must invalidate it (the same property `receipt.py` itself defends,
-    exercised here through the resolved-root path rather than a hand-built path)."""
-    mod = _load()
+    exercised here through the resolved-root path rather than a hand-built path). The reason comes back (GF-2(b))."""
+    mod, hs, fx = _installed(tmp_path)
     proj = _make_project(tmp_path, dirty=False)
     target = proj / "script.py"
     target.write_text("print('x')\n", encoding="utf-8")
     _write_valid_receipt(proj, [target])
     target.write_text("print('CHANGED')\n", encoding="utf-8")
-    assert mod._has_valid_receipt([str(target)], [str(target)]) is False
+    ok, why = mod._has_valid_receipt([str(target)], [str(target)])
+    assert ok is False and "change-set hash mismatch" in why

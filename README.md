@@ -69,8 +69,8 @@ The policies are defined once in `spec/POLICY_CORE.md` (harness-neutral) and tra
 per-harness adapter. That file is the count, not this README: at v0.13 it has 13 rows, of which one
 is retired (ASK-SESSION-RECORD, whose hook still ships and still asks before any read of a
 `governance/session_record/` folder the kit no longer creates) and one has no hook in this kit
-(CONTEXT-GUARD, below). The Claude Code adapter ships the rest, most of them self-tested (Self-test, below, names the
-four whose hooks have no fire/no-fire case yet):
+(CONTEXT-GUARD, below). The Claude Code adapter ships the rest, each with fire/no-fire cases in its self-test (Self-test, below, says what
+those cases cover):
 
 | Policy | Fires on | Effect |
 |---|---|---|
@@ -78,8 +78,8 @@ four whose hooks have no fire/no-fire case yet):
 | **GUARDRAIL** | every user prompt | a ≤4-line, task-aware reminder: planning → budgets + "PLAN before code" + *propose an adversarial review*; destructive → dry-run/apply gates; else → one rotated principle (rotation defeats habituation) |
 | **HANDOFF** | a prompt of exactly `cold start` | resumes a line of work from its predecessor's handoff file (`NEOCORTEX/HANDOFF_<role>_<date>_<time>Z.md`) with nothing pasted: one open role → its cold-start section; several → the list to choose from; none → why; never a guess (`handoff_resolve.py`) |
 | **COMPILE-GATE** | after each file edit | syntax-checks the edited file (`py_compile` / `bash -n` / `zsh -n` / `node --check` for `.js`, `.mjs`, `.cjs` when Node is installed / `osacompile`) and **blocks** with the error fed straight back; no TypeScript check (see *TypeScript & JavaScript*, below) |
-| **CLOSEOUT-GATE** | agent tries to end the turn | **blocks once** if code was edited but no verification ran, or the journal blew its size bound — sees an edit made through the harness's own file-editing tools OR a Bash command that writes/overwrites a tracked file (heredoc, `sed -i`, `tee`, `cp`/`mv`/`rsync`, `dd of=`); a write form neither of those catches is invisible to it; a verification counts only if it is a recognised test run (`verifier_recognizer.py`: piped, backgrounded, echoed or `|| true` runs do not count) |
-| **VERIFY-GATE** | a code-edited turn completes | checks for an **independently-anchored** verdict — a reviewer that could not see the author's intent (subagent / stateless API / CI / human); **advisory** by default, blocking once a project opts in with a `.verify/armed` file; a change-set-bound receipt that the CLI spends once under a locked ledger; the hooks check it without spending, so inside its window it satisfies every Stop over the same unchanged change-set until it is spent once — by the CLI included: for a receipt stored in `<project>/.verify/` the CLI spends into the ledger the Stop gate reads, and the next Stop refuses it (a corrupt ledger invalidates every receipt). A receipt does not yet record whether its review was independent, and does not check that its verdict file still hashes to `verdict_sha256`; the CLI's ledger follows the receipt's folder; and `CI=1` counts as an anchor (`_skills/verify_gate`, which `bootstrap.sh` places in your workspace) |
+| **CLOSEOUT-GATE** | agent tries to end the turn | **blocks once** if code was edited but no verification ran, or the journal blew its size bound — sees an edit made through the harness's own file-editing tools OR a Bash command that writes/overwrites a tracked file (heredoc, `sed -i`, `tee`, `cp`/`mv`/`rsync`, `dd of=`); a write form neither of those catches is invisible to it; a verification counts only if it is a recognised test run (`verifier_recognizer.py`: piped, backgrounded, echoed or `|| true` runs do not count); it also blocks, once per turn, when it cannot read the whole transcript (a record that does not parse or is still being written, a record over 64 MiB, a file over 1 GiB, or more than 128 MiB of kept tool-call text) — "TRANSCRIPT READ INCOMPLETE" — and says to continue in a new session |
+| **VERIFY-GATE** | a code-edited turn completes | checks for an **independently-anchored** verdict — a reviewer that could not see the author's intent (subagent / stateless API / CI / human); **advisory** by default, blocking once a project opts in with a `.verify/armed` file; a change-set-bound receipt (schema v2: it records `verdict_ref` and `attestation_sha256`) that the CLI spends once under a locked ledger; the hooks check it without spending, so inside its window it satisfies every Stop over the same unchanged change-set until it is spent once — by the CLI included: the CLI's receipt mode serves armed roots only and spends into the ledger the Stop gate reads, and the next Stop refuses it (a corrupt ledger invalidates every receipt). R-1: a receipt is issued only on an anchored, clean PASS; R-2: validation re-derives the decision from the hashed verdict and attestation bytes, reading every file without following links; R-3: one ledger per project root, found by one rule shared by the CLI and the hooks, and an armed state that cannot be read blocks; R-4: no anchor from environment variables. Its limit: on a local box a determined agent can still forge the whole evidence set (attestation, verdict, receipt), and single use is per project root: moving the ledger aside reopens every spent nonce. R-1 to R-4 close the accidental paths named above; they do not raise the cryptographic floor. A receipt does not prove what was reviewed: a genuine clean verdict and attestation, whatever they reviewed and however old, can be bound to any later change-set, any number of times, and an edit made while a review runs is not detected (planned: receipt-v3). Validation reads the changed files one after another, so an edit made during validation can pass. The Stop hook sees edits as the transcript spells them: a write under a scratch or temp exemption (an alias or a `..` escape into the project included), a `cd` inside a command, an unexpanded variable, or a link changed before the turn ends can escape the armed check. The hooks' import guard does not authenticate modules already in sys.modules; it refuses only an unverified module cached under a scripts-file name whose file lies in the scripts folder. The CLIs have no import guard. (`_skills/verify_gate`, which `bootstrap.sh` places in your workspace) |
 | **DENY-ARCHIVE** | before tool run | denies `rm`/`mv`/`find -delete`/`xargs` etc. that would delete or move an archive *out*; paths resolved physically (symlinks, `..`, `cd`, `git -C`) |
 | **DENY-CONTACT-DELETE** | before tool run | denies irreversible `delete person` AppleScript (born from a real data-loss incident) |
 | **DENY-WINDOW** | before tool run | denies heavy extraction/vectorization during machine-specific forbidden windows |
@@ -261,7 +261,7 @@ cd coding-constitution
 cp machine_config.example.yaml /tmp/cc-demo/governance/machine_config.yaml
 (cd /tmp/cc-demo && python3.12 .claude/hooks/hook_support.py --write-approved)
 
-# Run the enforcement self-test — 37 fire/no-fire cases over the real hooks:
+# Run the enforcement self-test — 54 fire/no-fire cases over the real hooks:
 bash adapters/claude-code/test_hooks.sh --root /tmp/cc-demo
 
 # Read the centerpiece (14 articles + 1 amendment, ≤190 lines):
@@ -272,9 +272,11 @@ less DECLARATION.md
 ```
 
 A hook that can't prove it fires is presumed dead (Art. 12). Self-test: the `test_hooks.sh` matrix covers ANCHOR,
-GUARDRAIL, COMPILE-GATE, CLOSEOUT-GATE, DENY-* and PUSH-AUDIT. Four hooks have no fire/no-fire case yet: VERIFY-GATE
-(`verify_advisory.py`; its library is tested by `_skills/verify_gate/tests`), SKILL-INDEX-REGEN, the session-record
-tripwire, and HANDOFF's `cold start` path (its resolver is tested by `test_handoff_resolve.py`).
+GUARDRAIL, COMPILE-GATE, CLOSEOUT-GATE, DENY-* and PUSH-AUDIT and, since v0.14.0, the four hooks that had no case:
+VERIFY-GATE's advisory path (`verify_advisory.py`; its library is tested by `_skills/verify_gate/tests`), SKILL-INDEX-REGEN,
+the session-record tripwire, and HANDOFF's `cold start` path (its resolver is tested by `test_handoff_resolve.py`). Those
+four run as a copy of the real hook in a throwaway root; stubs replace only what lies beyond the hook (`build_index.py`,
+`handoff_resolve.py`, `receipt.py`).
 `adapters/claude-code/verify_fires.py` reports which projects have had a hook fire live.
 Live proof: SessionStart only; the other events are tested synthetically by `test_hooks.sh`.
 
@@ -299,7 +301,7 @@ cp routing_policy.example.yaml /path/to/your/workspace/governance/routing_policy
 cp machine_config.example.yaml /path/to/your/workspace/governance/machine_config.yaml
 (cd /path/to/your/workspace && python3.12 .claude/hooks/hook_support.py --write-approved)
 
-# 3. Prove the hooks fire AND stay silent — 37 fire/no-fire cases (run after step 2: without
+# 3. Prove the hooks fire AND stay silent — 54 fire/no-fire cases (run after step 2: without
 #    machine_config.yaml the guard asks on every heavy job)
 bash adapters/claude-code/test_hooks.sh --root /path/to/your/workspace
 
@@ -446,6 +448,13 @@ next change that adds a line must remove one or amend the budget, per Art. 11):
 - **Release v0.13.3** (2026-11-09): follow-ups from the v0.13.2 reviews, no behaviour change to the hooks: the skill spec says
   which index checks are not yet built, more private record names are marked as not shipped, a placeholder is gone from the
   scanner's database pattern, and the README explains where three hook tests build their fixtures.
+- **Release v0.14.0** (2026-11-12): receipt v2 (verify_gate 0.4.0). A receipt now records `verdict_ref` and
+  `attestation_sha256`, is issued only on an anchored, clean PASS, and is checked by re-deriving the decision from the
+  hashed verdict and attestation; `CI=1` no longer anchors; one ledger per project root, and the CLI's receipt mode serves
+  armed roots only (no `--ledger`). A v1 receipt is now invalid: re-issue it under v2. The VERIFY-GATE row states what a
+  v2 receipt still does not prove. The CLOSEOUT gate reads the whole transcript and blocks with TRANSCRIPT READ
+  INCOMPLETE when it cannot. The self-test grows from 37 to 54 fire/no-fire cases (the four hooks that had none), and
+  `neocortex_manifest.py --init` writes the five STATUS sections the spec requires.
 - **Constitution** — v1.0, ratified 2026-06-10 after line-by-line + adversarial review; the Independence Preamble was added
   2026-06-20 and four changes were ratified 2026-10-27 (see Reviews). **NEOCORTEX_SPEC** and **UNIVERSAL_SKILL_SPEC** state
   their own versions and ratification dates in their headers.

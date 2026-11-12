@@ -421,3 +421,16 @@ def test_b5_20_build_index_cannot_silence_the_gate(ws, body):
     out = _stop_raw(ws, {"transcript_path": str(_edit_transcript(ws))})
     assert '"decision": "block"' in out and "settings.json" in out, out
     assert time.time() - t0 < 9, "the gate waited on the foreign module"
+
+
+# ---- GF-1(a) (PLAN_constitution_governed_fixes_s117 v0.8): the receipt checker is under the governor ----------------
+def test_gf1a_an_edit_to_a_verify_gate_script_shows_in_the_report(ws):
+    scripts = ws / "_skills" / "verify_gate" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "receipt.py").write_text("def validate_receipt(*a, **k):\n    return False, 'x'\n")
+    assert hs(ws, "--write-approved").returncode == 0
+    assert hs(ws, "--check").returncode == 0
+    with open(scripts / "receipt.py", "a") as fh:
+        fh.write("# appended\n")
+    r = hs(ws, "--check")
+    assert r.returncode == 1 and "_skills/verify_gate/scripts/receipt.py" in r.stdout, r.stdout

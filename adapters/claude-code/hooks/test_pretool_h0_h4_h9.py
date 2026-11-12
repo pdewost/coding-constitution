@@ -1617,3 +1617,17 @@ def test_n3_a_selected_green_inside_the_named_file_does_not_end_a_suite_red():
             asked.append(bool(lb.evaluate(ev)))
             ev += _ev(lb, vr, green_cmd, "1 passed in 0.1s")
         assert any(asked), green_cmd
+
+
+# v0.7.3 (s259 F-3): a result that exists only in an api-request-blob copy is not evidence; it never overrides the real one.
+def test_v073_a_blob_tool_result_never_overrides_the_real_result_in_the_loop_bound():
+    lb, _vr = _lb_pure()
+    use = {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "b1", "name": "Bash", "input": {"command": "pytest -q"}}]}}
+    red = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "b1", "is_error": True,
+                                                    "content": "Exit code 1\n1 failed in 0.1s"}]}}
+    green = {"type": "api-request-blob", "hash": "x", "message": {"content": [{"type": "tool_result", "tool_use_id": "b1",
+                                                                              "is_error": False, "content": "3 passed in 0.1s"}]}}
+    prompt = {"type": "user", "message": {"role": "user", "content": "go"}}
+    plain = lb.turn_events([prompt, use, red])
+    assert lb.turn_events([prompt, use, red, green]) == plain
+    assert lb.turn_events([prompt, use, green]) == lb.turn_events([prompt, use])      # blob-only result == no result

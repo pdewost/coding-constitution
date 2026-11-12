@@ -36,11 +36,15 @@ if __name__ == "__main__" and _sys0.path and \
 import datetime
 import hashlib
 import json
+import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
+import time
 import sys
+import time
 from pathlib import Path
 
 def _resolve_root(start: Path) -> Path:
@@ -270,6 +274,40 @@ def _unquote(tok: str) -> str:
     return tok
 
 
+_UNRESOLVED = "<unresolved-tilde>/"     # a relative marker: _qualify keeps it relative, so the placement rule reads a resolution failure
+
+
+def _posix_unquote(tok: str) -> str:
+    """Shell quote and escape removal of ONE word (the tokenizer keeps quote characters); a malformed word keeps `_unquote`."""
+    if not tok:
+        return tok
+    try:
+        parts = shlex.split(tok, posix=True)
+    except ValueError:
+        return _unquote(tok)
+    return parts[0] if len(parts) == 1 else _unquote(tok)
+
+
+def _tgt(tok: str) -> str:
+    """A write/rm target as the shell reads the word (s241 F-1, s242 F-1). The tilde-prefix is the part up to the first `/`; it is
+    eligible only when it holds no quote or backslash. `~` and `~user` expand (`expanduser`); `~+`, `~-` and a user that does not
+    exist are UNRESOLVED: the word becomes `_UNRESOLVED + word`, a relative path that `_qualify` leaves relative, which the
+    placement rule reads as a resolution failure (blocks), never a folder under the cwd. Then quotes and escapes are removed from the
+    whole word. This is the only place a `~` is expanded: `_qualify` is the plain join the receipt CLI uses."""
+    if tok[:1] == "~":
+        import os
+        if set(tok) & set("\\$`"):                    # s243 F-1: a backslash, `$` or backtick anywhere: not resolved here (Bash differs from shlex)
+            return _UNRESOLVED + tok
+        cut = tok.find("/")
+        prefix, rest = (tok, "") if cut < 0 else (tok[:cut], tok[cut:])
+        if not (set(prefix) & set("\"'\\")):
+            home = os.path.expanduser(prefix) if prefix not in ("~+", "~-") else prefix
+            if home == prefix:
+                return _UNRESOLVED + _posix_unquote(tok)
+            return home + _posix_unquote(rest)
+    return _posix_unquote(tok)
+
+
 _ASSIGN_RE = None
 
 
@@ -297,7 +335,7 @@ def _resolve_vars(targets: list, cmd: str, amap: dict = None) -> list:
     """(e) 2026-10-06, first field report after P7: write targets spelled through a shell variable (`$SP/x.py`,
     `${D}/y.swift`) are resolved from assignments in the same command, then from the environment; a target that
     still holds an unresolved variable is DROPPED (its location is unknown: the same documented limit as the
-    guard's variable indirection). `~` is expanded."""
+    guard's variable indirection). A `~` is NOT expanded here: the parser expands an unquoted one (`_tgt`)."""
     import os
     import re
     global _ASSIGN_RE
@@ -313,6 +351,9 @@ def _resolve_vars(targets: list, cmd: str, amap: dict = None) -> list:
         assigns = {k: next(iter(v)) for k, v in seen.items() if len(v) == 1}
     out = []
     for t in targets:
+        if t.startswith(_UNRESOLVED):          # s243 F-1: a marked word is a resolution failure, kept (never dropped as a variable)
+            out.append(t)
+            continue
         if "$" in t:
             def sub(m):
                 v = assigns.get(m.group(1), None if amap is not None and m.group(1) in amap else
@@ -321,7 +362,7 @@ def _resolve_vars(targets: list, cmd: str, amap: dict = None) -> list:
             t = re.sub(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", sub, t)
             if "\x00" in t or "$" in t:
                 continue
-        out.append(os.path.expanduser(t))
+        out.append(t)
     return out
 
 
@@ -353,7 +394,7 @@ def _bash_write_targets(cmd: str) -> list:
         for i, tok in enumerate(seg):
             # B2-18: every file-redirect spelling (`>|`, `&>`, `&>>`, and `>&` when its word is not an fd)
             if tok in (">", ">>", ">|", "&>", "&>>", ">&") and i + 1 < len(seg):
-                tgt = _unquote(seg[i + 1])
+                tgt = _tgt(seg[i + 1])
                 if tok == ">&" and (tgt.isdigit() or tgt == "-"):
                     continue
                 targets.append(tgt)
@@ -377,12 +418,12 @@ def _bash_write_targets(cmd: str) -> list:
         fw = _vr.formatter_writes(verb, args) if _vr is not None else None
         if fw is not None:
             if fw:                                   # B2-18: a formatter in write mode edits its operands
-                targets.extend(a for a in _vr._nonflags(args) if "." in a.split("/")[-1])
+                targets.extend(_tgt(a) for a in _vr._nonflags(args) if "." in a.split("/")[-1])
             continue
         if verb == "sed" and any(re.match(r"^(-[A-Za-z]*i|--in-place)", _unquote(a)) for a in args):   # B5-09
-            targets.extend(_unquote(a) for a in args if not a.startswith("-"))
+            targets.extend(_tgt(a) for a in args if not a.startswith("-"))
         elif verb in _NAMED_WRITE_VERBS:
-            targets.extend(_unquote(a) for a in args if not a.startswith("-"))
+            targets.extend(_tgt(a) for a in args if not a.startswith("-"))
         elif verb == "dd":
             for a in args:
                 if a.lower().startswith("of="):
@@ -390,7 +431,7 @@ def _bash_write_targets(cmd: str) -> list:
         elif verb in _DEST_VERBS:
             operands = [a for a in args if not a.startswith("-")]
             if operands:
-                targets.append(_unquote(operands[-1]))
+                targets.append(_tgt(operands[-1]))
     return targets
 
 
@@ -436,32 +477,42 @@ def _bash_rm_targets(cmd: str) -> list:
         verb = _unquote(words[0]).split("/")[-1].lower()
         if verb != "rm":
             continue
-        targets.extend(_unquote(a) for a in words[1:] if not a.startswith("-"))
+        targets.extend(_tgt(a) for a in words[1:] if not a.startswith("-"))
     return targets
 
 
-def _transcript_cap() -> int:
-    import os
+def _capped(name: str, default: int) -> int:
+    """A cap from the environment can only LOWER the default (tests only; floor 1000 bytes)."""
     try:
-        v = int(os.environ.get("CLOSEOUT_TRANSCRIPT_CAP", ""))
-        if 1000 <= v <= 64 * 1024 * 1024:
-            return v                                        # tests only; bounded
+        v = int(os.environ.get(name, ""))
+        if 1000 <= v <= default:
+            return v
     except ValueError:
         pass
-    return 64 * 1024 * 1024
+    return default
 
 
-TRANSCRIPT_CAP = _transcript_cap()
-_TRUNCATED = [False]
+# v0.8 (PLAN R-3 Input v0.8, S-2): ONE read of the whole transcript into one ledger. FILE_CAP bounds the file (a larger one is read over
+# its last FILE_CAP bytes and the ledger is incomplete); LINE_CAP bounds one record (a longer one is never loaded, the ledger is
+# incomplete). An incomplete ledger BLOCKS the gate (S-4): uncertainty is never read as "nothing happened".
+FILE_CAP = _capped("CLOSEOUT_TRANSCRIPT_CAP", 1 << 30)
+LINE_CAP = _capped("CLOSEOUT_LINE_CAP", 64 << 20)
+RETAIN_CAP = _capped("CLOSEOUT_RETAIN_CAP", 128 << 20)   # v0.8.1 (s282 F-3): the tool-call text one ledger may keep in memory
+TORN_RETRY_S = 0.3                                       # v0.8.1 (s282 F-2): the one wait before a torn last line is re-read
+_TOOL_INPUT_KEYS = ("file_path", "notebook_path", "command", "run_in_background", "action")
+
+
+def _fmt_bytes(n: int) -> str:
+    for unit, name in ((1 << 30, "GiB"), (1 << 20, "MiB")):
+        if n % unit == 0:
+            return "%d %s" % (n // unit, name)
+    return "%d bytes" % n
 
 
 def _safe_open_transcript(tpath: str):
-    """Defensively open the externally-supplied transcript path (F7): O_NOFOLLOW (refuse a
-    symlinked final component) + O_NONBLOCK + regular-file-only (no /dev/* or FIFOs, so a
-    special-file transcript can't make the read never end). Returns a text stream or None —
-    fail-open: an unreadable/odd transcript just skips the closeout scan, never false-blocks."""
-    import os
-    import stat
+    """Defensively open the externally-supplied transcript path (F7): O_NOFOLLOW (refuse a symlinked final component) + O_NONBLOCK +
+    regular-file-only (no /dev/* or FIFOs, so a special-file transcript can't make the read never end). Returns (binary stream, size
+    taken once by fstat) or None: an unreadable/odd transcript is the F7 outcome (exit 0, no assertion)."""
     if not isinstance(tpath, str) or not tpath:
         return None   # F7: non-string/empty transcript_path (e.g. JSON null) -> fail-open, no crash
     try:
@@ -469,137 +520,451 @@ def _safe_open_transcript(tpath: str):
     except OSError:
         return None
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
             os.close(fd)
             return None
+        return os.fdopen(fd, "rb"), st.st_size
     except OSError:
-        os.close(fd)
-        return None
-    fh = os.fdopen(fd, encoding="utf-8", errors="replace")
-    # S4-55 (final): past the cap, read the TAIL (the recent turns) instead of silently dropping it.
-    try:
-        size = os.fstat(fd).st_size
-        if size > TRANSCRIPT_CAP:
-            fh.seek(size - TRANSCRIPT_CAP)
-            fh.readline()                                   # drop the partial first line
-            _TRUNCATED[0] = True
-    except (OSError, ValueError):
-        pass
-    return fh
-
-
-def _collect_error_tool_use_ids(tpath: str) -> set:
-    """Pre-pass: every tool_use `id` whose paired tool_result came back is_error=true.
-
-    A tool_use block exists in the transcript the moment the call is MADE — it says
-    nothing about whether the call actually succeeded. A failed Edit (bad path, a no-op
-    "old_string == new_string" rejection, a permissions error) still produces a normal
-    tool_use block, so without this check it counted as a real edit, exactly like a
-    successful one. Found live, 2026-09-14: a mistyped Edit path
-    (/srv/example/workspace/example-project/…, missing a path segment, directory doesn't
-    exist) errored with no write, yet kept showing up in the block message turns later
-    as still-unverified — there was never anything to verify.
-
-    Best-effort and fail-open: any parse hiccup just omits that id from the set (worst
-    case, one more edit gets treated as real and asks for verification that technically
-    wasn't needed — the same over-inclusion bias as the rest of this gate, never the
-    reverse). Second pass over the same file the main loop reads; same 64 MB cap.
-    """
-    ids = set()
-    fh = _safe_open_transcript(tpath)
-    if fh is None:
-        return ids
-    try:
-        read_bytes = 0
-        for line in fh:
-            try:
-                entry = json.loads(line)
-            except Exception:
-                continue
-            msg = entry.get("message") or {}
-            for blk in msg.get("content") or []:
-                if not isinstance(blk, dict) or blk.get("type") != "tool_result":
-                    continue
-                if blk.get("is_error") is True and blk.get("tool_use_id"):
-                    ids.add(blk["tool_use_id"])
-    except OSError:
-        return ids
-    finally:
-        fh.close()
-    return ids
-
-
-def _verify_project_root(edited_paths):
-    """Resolve the ONE governed project `.verify/` belongs to, from the files EDITED THIS TURN
-    — never from `Path.cwd()`. Found 2026-08-28, proving the mechanism live rather than reading
-    the code: `Path.cwd()/.verify/...` reads valid only when the session's actual shell cwd is
-    the project itself, and reads ABSENT from the workspace root — this session's own documented
-    "primary working directory," and where most governed work here actually happens. Placing
-    `.verify/armed` at a project root would leave a workspace-root-cwd session silently UNARMED
-    despite being armed; placing it at the workspace root instead would silently govern the
-    entire fleet. Neither is "arm this project." Same fix shape `_advisory_roots()` already uses
-    for the non-blocking advisories, one turn's edited files rather than cwd.
-
-    NOT shared code with `_advisory_roots()` / `_journal_project_root()` — each already has a
-    different contract (up-to-3 roots with a fallback; single root from cwd/env) and this file's
-    own convention is separate, purpose-built resolvers, not a forced-shared abstraction.
-
-    SAFE to widen, unlike the JOURNAL bound check `_advisory_roots()`'s own docstring warns off:
-    that check's predicate (an oversized JOURNAL.md) is real and widespread today, so fixing its
-    resolution could start blocking turns that pass by accident. verify_gate's predicate (a
-    `.verify/armed` marker) exists NOWHERE in the fleet as of this fix — confirmed by a live
-    `find` sweep — so correcting the resolution changes zero live behavior today; it only matters
-    once/if a project is actually armed.
-
-    Bounded to the FIRST governed root found (deterministic order), not up to 3 like the
-    advisories — a `.verify/` state is per-project, singular, and a turn touching multiple
-    armed projects at once is an edge case worth naming, not engineering for blind.
-    """
-    for fp in edited_paths or []:
         try:
-            cand = Path(fp).resolve().parent
+            os.close(fd)
+        except OSError:
+            pass
+        return None
+
+
+class _Ledger:
+    """What one read of the transcript found. `events`: the records that carry tool calls, in file order, each
+    {"line", "blob", "cwd", "blocks"} with blocks reduced to id, name and the input fields the walk uses. `results`: real
+    tool_use id -> (is_error, text, truncated). `incomplete`: reasons the read was not whole (empty when whole)."""
+
+    def __init__(self):
+        self.events = []
+        self.last_text, self.last_text_line, self.last_prompt_line = "", -1, -1
+        self.results = {}
+        self.real_use_ids = set()
+        self.blob_result_ids = set()
+        self.incomplete = []
+
+
+def _read_ledger(tpath: str, opener=None):
+    """The only code that opens the transcript (S-1). `opener(tpath)` returns (binary stream, size) or None (tests count reads and
+    append bytes after the open through it). Returns a _Ledger, or None when the transcript cannot be opened (F7)."""
+    opened = (opener or _safe_open_transcript)(tpath)
+    if opened is None:
+        return None
+    fh, size = opened
+    led = _Ledger()
+    pending = {}      # blob tool_use id -> its block, kept once and only until a real twin is known
+    names = {}        # real tool_use id -> tool name
+    file_cap, line_cap = FILE_CAP, LINE_CAP
+    retained = 0
+
+    def parse(chunk):
+        # (entry, its message, bad). `bad` is True only for a record that does not PARSE (v0.8.1, s282 F-2: no byte marker can tell
+        # what a damaged record held). A record that parses but is no object, or whose message is no object, holds no tool block.
+        try:
+            entry = json.loads(chunk.decode("utf-8", "replace"))
         except Exception:
+            return None, None, True
+        if not isinstance(entry, dict):
+            return {}, {}, False
+        raw_msg = entry.get("message")
+        return entry, raw_msg if isinstance(raw_msg, dict) else {}, False
+
+    def note(reason):
+        if reason not in led.incomplete:
+            led.incomplete.append(reason)
+
+    def skip_rest(chunk, pos):
+        # the remainder of a record that is not kept: bounded reads, never loaded whole
+        while not chunk.endswith(b"\n") and pos < size:
+            chunk = fh.readline(min(line_cap + 1, size - pos))
+            if not chunk:
+                break
+            pos += len(chunk)
+        return pos
+
+    try:
+        pos, line_no = 0, -1
+        if size > file_cap:
+            pos = size - file_cap
+            fh.seek(pos)
+            note("transcript over " + _fmt_bytes(file_cap))
+            first = fh.readline(min(line_cap + 1, size - pos))
+            pos = skip_rest(first, pos + len(first))              # drop the partial first line
+        while pos < size:
+            chunk = fh.readline(min(line_cap + 1, size - pos))
+            if not chunk:
+                break
+            pos += len(chunk)
+            line_no += 1
+            has_nl = chunk.endswith(b"\n")
+            if len(chunk) - (1 if has_nl else 0) > line_cap:
+                note("record over " + _fmt_bytes(line_cap))
+                pos = skip_rest(chunk, pos)
+                continue
+            if not chunk.strip():
+                continue                    # a blank line holds no record (internal review 2026-11-12)
+            entry, msg, bad = parse(chunk)
+            torn = bad and not has_nl and pos >= size      # only the file's last line can be torn, so the re-read runs at most once
+            if torn:
+                # v0.8.1 (s282 F-2): the last record may be mid-write. ONE wait, ONE re-read of that record alone (to its newline,
+                # bounded like any record); bytes after it stay unread (S-2: one snapshot).
+                try:
+                    time.sleep(TORN_RETRY_S)
+                    fh.seek(pos - len(chunk))
+                    again = fh.readline(line_cap + 1)
+                    if again.endswith(b"\n") and len(again) - 1 <= line_cap:
+                        entry, msg, bad = parse(again)
+                        torn = False
+                except Exception:
+                    pass
+            if bad:
+                note("record being written" if torn else "unreadable record")
+                continue
+            blob = entry.get("type") == "api-request-blob"
+            content = msg.get("content")
+            blocks = [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+            if not blob:
+                if _is_human_prompt(entry):
+                    led.last_prompt_line = line_no
+                if entry.get("type") == "assistant":
+                    for blk in blocks:
+                        if blk.get("type") == "text" and isinstance(blk.get("text"), str) and blk["text"]:
+                            led.last_text, led.last_text_line = blk["text"], line_no
+            kept = []
+            for blk in blocks:
+                kind = blk.get("type")
+                if kind == "tool_use":
+                    tid = blk.get("id") if isinstance(blk.get("id"), str) and blk.get("id") else None
+                    inp = blk.get("input") if isinstance(blk.get("input"), dict) else {}
+                    red = {"id": tid, "name": blk.get("name", ""), "input": {k: inp[k] for k in _TOOL_INPUT_KEYS if k in inp}}
+                    cost = sum(len(v) for v in red["input"].values() if isinstance(v, str))
+                    if not blob:
+                        if tid:
+                            led.real_use_ids.add(tid)
+                            names[tid] = red["name"]
+                            if tid in pending:
+                                pending.pop(tid)["dead"] = True         # a real twin is now known: the copy is dropped
+                        kept.append(red)
+                        retained += cost
+                    elif not (tid and (tid in led.real_use_ids or tid in pending)):
+                        if tid:
+                            pending[tid] = red
+                        kept.append(red)
+                        retained += cost
+                elif kind == "tool_result":
+                    tid = blk.get("tool_use_id")
+                    if not (isinstance(tid, str) and tid):
+                        continue
+                    if blob:
+                        led.blob_result_ids.add(tid)
+                        continue
+                    try:
+                        text = _text_of(blk.get("content")) if names.get(tid, "Bash") == "Bash" else ""   # a known non-Bash call: no text kept
+                    except Exception:
+                        text = ""
+                    truncated = len(text) > 8192             # Seat B B-14: a cut output never proves a pass
+                    if truncated:
+                        text = text[:4096] + "\n...\n" + text[-4096:]
+                    led.results[tid] = (blk.get("is_error") is True, text, truncated)
+                    retained += len(text)
+            if kept:
+                led.events.append({"line": line_no, "blob": blob, "cwd": "" if blob else str(entry.get("cwd") or ""), "blocks": kept})
+            if retained > RETAIN_CAP:
+                # v0.8.1 (s282 F-3): past the budget nothing more is kept and nothing kept is judged: the incomplete block is the
+                # outcome (S-4), reached without walking what was read
+                note("tool-call text over " + _fmt_bytes(RETAIN_CAP))
+                led.events, led.results = [], {}
+                break
+    except OSError:
+        note("read error")
+    finally:
+        try:
+            fh.close()
+        except OSError:
+            pass
+    for ev in led.events:
+        ev["blocks"] = [b for b in ev["blocks"] if not b.get("dead")]
+    led.events = [ev for ev in led.events if ev["blocks"]]
+    for tid, (err, text, trunc) in list(led.results.items()):
+        if names.get(tid) != "Bash":
+            led.results[tid] = (err, "", False)               # only a Bash result's text is ever read
+    return led
+
+
+def _verify_project_root(edited_paths, mods):
+    """The ONE project-root rule lives in receipt.py (receipt-v2 R-3, GF-2): this is only the delegation, no `CLAUDE.md`
+    test and no ancestor walk of its own. Returns (root, reason)."""
+    return mods["receipt"].project_root(edited_paths)
+
+
+def _rr_walk(path):
+    """Resolve an absolute, unnormalised `path` component by component with lstat/readlink only, as the kernel does (`..` applies
+    after a link; at most 40 links). ("ok", resolved) | ("absent", lexical placement from the nearest existing ancestor: ENOENT
+    or ENOTDIR on a component means the rest does not exist) | ("fail", None): ELOOP, EACCES, any other error, over 40 links."""
+    cur, links = [], 0
+    todo = [c for c in path.split("/") if c][::-1]
+    while todo:
+        c = todo.pop()
+        if c == ".":
             continue
-        for d in (cand, *cand.parents):
-            if (d / "CLAUDE.md").is_file() and (d / "NEOCORTEX").is_dir():
-                return d
-    return None
+        if c == "..":
+            if cur:
+                cur.pop()
+            continue
+        p = "/" + "/".join(cur + [c])
+        try:
+            st = os.lstat(p)
+        except (FileNotFoundError, NotADirectoryError):
+            return "absent", os.path.normpath("/" + "/".join(cur + [c] + todo[::-1]))
+        except OSError:
+            return "fail", None
+        if stat.S_ISLNK(st.st_mode):
+            links += 1
+            if links > 40:
+                return "fail", None
+            try:
+                target = os.readlink(p)
+            except OSError:
+                return "fail", None
+            if not target:
+                return "fail", None
+            if target.startswith("/"):
+                cur = []
+            todo.extend([x for x in target.split("/") if x][::-1])
+        else:
+            cur.append(c)
+    return "ok", "/" + "/".join(cur)
+
+
+def _rr_test_dir(d):
+    """Test one ancestor `d`: lstat of BOTH `d/NEOCORTEX` and `d/.verify`, always both. "absent" when either is ENOENT/ENOTDIR (`d` is
+    not a candidate; nothing is followed); "unreadable" when neither is proved absent and an error prevents deciding, or when a
+    candidate is malformed (a wrong type of NEOCORTEX, .verify or armed, a dangling or looping link, any error but ENOENT);
+    "unarmed" for a well-formed candidate with no `armed` (passed over); "armed" for NEOCORTEX folder + .verify folder + armed file."""
+    gone = err = False
+    for entry in ("NEOCORTEX", ".verify"):
+        try:
+            os.lstat(os.path.join(d, entry))
+        except (FileNotFoundError, NotADirectoryError):
+            gone = True
+        except OSError:
+            err = True
+    if gone:
+        return "absent"
+    if err:
+        return "unreadable"
+    try:
+        neo = os.stat(os.path.join(d, "NEOCORTEX")).st_mode
+        ver = os.stat(os.path.join(d, ".verify")).st_mode
+    except OSError:
+        return "unreadable"
+    if not (stat.S_ISDIR(neo) and stat.S_ISDIR(ver)):
+        return "unreadable"
+    marker = os.path.join(d, ".verify", "armed")
+    try:
+        os.lstat(marker)
+    except FileNotFoundError:
+        return "unarmed"
+    except OSError:
+        return "unreadable"
+    try:
+        return "armed" if stat.S_ISREG(os.stat(marker).st_mode) else "unreadable"
+    except OSError:
+        return "unreadable"
+
+
+def _rr_ancestors(start):
+    """From `start` up to `/`: ("unreadable", None) at the first unreadable candidate, ("armed", d) at the first armed root,
+    (None, None) when neither is met."""
+    d = start
+    while True:
+        state = _rr_test_dir(d)
+        if state == "unreadable":
+            return "unreadable", None
+        if state == "armed":
+            return "armed", d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None, None
+        d = parent
+
+
+def _rr_place(path):
+    """Place ONE path twice, lexically (normpath, `..` folded) and resolved (_rr_walk). Returns (kind, root, key) with kind in
+    "unreadable" | "ambiguous" | "root" | "none". In this order: an unreadable candidate met on either placement is unreadable;
+    an armed root from either placement is that root (one root spelled two ways, same device and inode, is one root; two
+    different ones are ambiguous); a resolution failure and no armed root found lexically is unreadable; otherwise "none".
+    A path that is not an absolute string is a resolution failure."""
+    if not isinstance(path, str) or not path.startswith("/") or "\0" in path:
+        return "unreadable", None, None
+    lexical = _rr_ancestors(os.path.dirname(os.path.normpath(path)))
+    how, placed = _rr_walk(path)
+    resolved = _rr_ancestors(os.path.dirname(placed)) if how != "fail" else (None, None)
+    if "unreadable" in (lexical[0], resolved[0]):
+        return "unreadable", None, None
+    roots = []
+    for state, d in (resolved, lexical):
+        if state == "armed":
+            try:
+                s = os.stat(d)
+            except OSError:
+                return "unreadable", None, None
+            if (s.st_dev, s.st_ino) not in [r[0] for r in roots]:
+                roots.append(((s.st_dev, s.st_ino), d))
+    if len(roots) > 1:
+        return "ambiguous", None, None
+    if roots:
+        return "root", roots[0][1], roots[0][0]
+    if how == "fail":
+        return "unreadable", None, None
+    return "none", None, None
+
+
+def _rr_scan(paths):
+    """Across paths: unreadable > ambiguous > root > none; two different roots among paths are ambiguous. Returns (kind, root)."""
+    try:
+        items = list(paths or [])
+    except Exception:
+        return "unreadable", None
+    roots, ambiguous = [], False
+    for fp in items:
+        try:
+            kind, d, key = _rr_place(fp)
+        except Exception:
+            return "unreadable", None
+        if kind == "unreadable":
+            return "unreadable", None
+        if kind == "ambiguous":
+            ambiguous = True
+        elif kind == "root" and key not in [r[0] for r in roots]:
+            roots.append((key, d))
+    if ambiguous or len(roots) > 1:
+        return "ambiguous", None
+    if roots:
+        return "root", roots[0][1]
+    return "none", None
+
+
+def _probe_armed_local(edited_paths) -> bool:
+    """Module-free armed-ness probe for when hook_support cannot be loaded (GF-1(d) rule 2): the same answers as
+    hook_support.vg_probe, from the same placement text (`_rr_scan`; a parity test holds the three copies equal): armed or not
+    armed only, raising OSError where project_root says "armed state unreadable". Stdlib only."""
+    kind, _root = _rr_scan(edited_paths)
+    if kind == "unreadable":
+        raise OSError("armed state unreadable")
+    return kind in ("root", "ambiguous")
+
+
+def _safe_text(exc, limit=200) -> str:
+    """`str(exc)` that cannot raise: an exception whose __str__ raises is named by its type (s232 F-1)."""
+    try:
+        return str(exc)[:limit]
+    except BaseException:
+        try:
+            return "<%s>" % type(exc).__name__
+        except BaseException:
+            return "<exception>"
+
+
+def _verify_state(edited_paths):
+    """GF-1(d) / GF-2: what the VERIFY-GATE does for this turn. Returns a dict:
+      armed  - the turn is under an armed project (a `.verify/armed` marker at the resolved root);
+      block  - None, or the text the turn blocks with whatever the receipt says (ambiguous root, a script that is not
+               approved or failed, an unreadable armed state);
+      root   - the resolved project root (Path) or None;
+      mods   - the loaded verify_gate modules or None.
+    The WHOLE interaction with hook_support and the loaded set (vg_prepare, indexing its result, project_root, vg_failure,
+    the marker check) is under one boundary (s232 F-1): nothing raised there leaves this function. On any unexpected
+    exception the module-free probe answers armed or not armed only (D4): armed blocks with "verify_gate script failed: ...",
+    a probe error is row 8. When hook_support cannot be loaded at all the same probe answers (rule 2)."""
+    st = {"armed": False, "block": None, "root": None, "mods": None}
+    fail = None
+    if _hs is None:     # hook_support (loader and probe) unavailable: the gate's own stdlib-only probe answers (rule 2)
+        why = f"{type(_HS_ERR).__name__}: {_safe_text(_HS_ERR)}" if _HS_ERR is not None else "not loaded (bytes differ from the approved list)"
+        fail = (7, f"verify_gate script failed: hook_support: {why}"[:240])
+    else:
+        try:
+            prep = _hs.vg_prepare(ROOT)
+            if prep["ok"]:
+                root, reason = _verify_project_root(edited_paths, prep["mods"])
+                if root is not None:
+                    # a root that project_root returns IS armed: no second marker read (s233 D-5, s238 F-7)
+                    st.update(armed=True, root=Path(root), mods=prep["mods"])
+                    return st
+                if reason in ("ambiguous project root", "armed state unreadable"):
+                    st.update(armed=True, block=reason, mods=prep["mods"])     # no receipt can satisfy either
+                    return st
+                if reason == "no project root":
+                    st["mods"] = prep["mods"]
+                    return st
+                fail = (7, "verify_gate script failed: receipt: unexpected project_root reason %s" % _safe_text(repr(reason)))
+            else:
+                fail = (prep["row"], prep["text"])
+        except BaseException as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                raise
+            try:
+                fail = _hs.vg_failure(exc, ROOT)
+            except BaseException as exc2:
+                if isinstance(exc2, KeyboardInterrupt):
+                    raise
+                fail = (7, "verify_gate script failed: receipt: %s: %s"
+                        % (type(exc).__name__, _safe_text(exc)))
+            st.update(armed=False, block=None, root=None, mods=None)
+    st["mods"] = None
+    try:
+        found = _probe_armed_local(edited_paths) if _hs is None else _hs.vg_probe(edited_paths)
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            raise
+        try:
+            _log_error("stop_closeout_gate.vg_probe", exc)
+        except BaseException as exc2:
+            if isinstance(exc2, KeyboardInterrupt):
+                raise
+        st["armed"], st["block"] = True, "verify_gate armed state unreadable"
+        return st
+    if found:
+        try:
+            text = str(fail[1])[:240]
+        except BaseException as exc3:      # a failure text whose __str__ raises must not leave the boundary (s235 E-10, s241 F-3:
+            if isinstance(exc3, KeyboardInterrupt):      # SystemExit too, as every other helper here; KeyboardInterrupt excepted)
+                raise
+            text = "verify_gate script failed (armed project; the failure text is unavailable)"
+        st["armed"], st["block"] = True, text
+    return st
 
 
 def _verify_armed(edited_paths) -> bool:
-    """A project opts into BLOCKING independent-verification by placing a `.verify/armed`
-    marker AT ITS OWN ROOT (resolved from edited files, see `_verify_project_root`). Until then
-    the VERIFY-GATE is advisory (see verify_advisory.py) — this gate never blocks on it. No
-    project is armed today, so this path is dormant (zero behavior change)."""
-    try:
-        root = _verify_project_root(edited_paths)
-        if root is None:
-            return False
-        return (root / ".verify" / "armed").is_file()
-    except OSError:
-        return False
+    """A project opts into BLOCKING independent-verification by placing a `.verify/armed` marker AT ITS OWN ROOT
+    (receipt.project_root, from the files edited this turn: never `Path.cwd()`). A project without the marker is not
+    armed: the gate does not block it on verification."""
+    return bool(_verify_state(edited_paths)["armed"])      # R-3: no `except OSError: return False` (uncertainty is never "not armed")
 
 
-def _has_valid_receipt(edited_paths, changed_paths: list) -> bool:
-    """True iff a valid, change-set-bound VERIFY-RECEIPT exists for exactly these files, at the
-    edited project's own `.verify/` (never `Path.cwd()`). The fabricable `echo test_` substring
-    does NOT satisfy this — it needs a real attested verdict."""
+def _has_valid_receipt(edited_paths, changed_paths: list, state=None):
+    """(ok, reason). ok iff a valid, change-set-bound, v2 VERIFY-RECEIPT exists for exactly these files at the edited
+    project's own `.verify/` (never `Path.cwd()`). `reason` is validate_receipt's reason when a receipt file exists and fails,
+    "" when none exists. The fabricable `echo test_` substring does NOT satisfy this."""
     try:
-        root = _verify_project_root(edited_paths)
-        if root is None:
-            return False
-        import sys as _sys
-        _sys.path.insert(0, str(ROOT / "_skills" / "verify_gate" / "scripts"))
-        import receipt as _r  # type: ignore
+        st = state if state is not None else _verify_state(edited_paths)
+        root, mods = st["root"], st["mods"]
+        if root is None or mods is None:
+            return False, ""
         rpath = root / ".verify" / "receipt.json"
         if not rpath.is_file():
-            return False
+            return False, ""
         rec = json.loads(rpath.read_text(encoding="utf-8"))
         ledger = str(root / ".verify" / "_consumed_nonces.json")
-        ok, _ = _r.validate_receipt(rec, changed_paths=changed_paths, ledger_path=ledger)
-        return bool(ok)
-    except Exception:
-        return False
+        ok, why = mods["receipt"].validate_receipt(rec, changed_paths=changed_paths, ledger_path=ledger)
+        return bool(ok), str(why)
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            raise
+        return False, "verify_gate script failed: receipt: %s: %s" % (type(exc).__name__, _safe_text(exc))
 
 
 def _python312():
@@ -614,7 +979,7 @@ def _python312():
         return None
 
 
-def _continuity_advisory(proj_root) -> str:
+def _continuity_advisory(proj_root, timeout: float = 8) -> str:
     """Project-scoped continuity sweep, ADVISORY ONLY. Returns a one-line summary, or ""
     when clean/unavailable. Fail-open on every path: any error, missing script, missing
     interpreter or timeout yields "" — this must never block, warn wrongly, or raise."""
@@ -629,7 +994,7 @@ def _continuity_advisory(proj_root) -> str:
             print(f"CLOSEOUT-ADVISORY continuity check DISABLED: {why}", file=sys.stderr)
             return ""
         r = subprocess.run([py, str(sweep), "--project", str(proj_root)],
-                           capture_output=True, text=True, timeout=8)
+                           capture_output=True, text=True, timeout=timeout)
         if r.returncode != 1:      # 0 = clean, 2 = usage error => stay silent
             return ""
         last = [ln for ln in r.stdout.splitlines() if ln.startswith("RESULT:")]
@@ -638,7 +1003,7 @@ def _continuity_advisory(proj_root) -> str:
         return ""
 
 
-def _staleness_advisory(proj_root, ledger_path: 'Path | None' = None) -> str:
+def _staleness_advisory(proj_root, ledger_path: 'Path | None' = None, timeout: float = 20) -> str:
     """Project-scoped `closeout_lint`, ADVISORY ONLY. Same contract as the continuity sweep.
 
     This is M-9's missing half. The §3 gate of 2026-08-26 found the linter shipped with ZERO
@@ -672,7 +1037,7 @@ def _staleness_advisory(proj_root, ledger_path: 'Path | None' = None) -> str:
             print(f"CLOSEOUT-ADVISORY staleness check DISABLED: {why}", file=sys.stderr)
             return ""
         r = subprocess.run([py, str(lint), "--path", str(proj_root), "--json"],
-                           capture_output=True, text=True, timeout=20)
+                           capture_output=True, text=True, timeout=timeout)
         if r.returncode not in (0, 1):      # 2 = usage error; --json never returns anything else
             return ""
         findings = []
@@ -760,12 +1125,15 @@ def _advisory_roots(edited_paths, fallback):
             cand = Path(fp).resolve().parent
         except Exception:
             continue
-        for d in (cand, *cand.parents):
-            if (d / "CLAUDE.md").is_file() and (d / "NEOCORTEX").is_dir():
-                if str(d) not in seen:
-                    seen.add(str(d))
-                    roots.append(d)
-                break
+        try:
+            for d in (cand, *cand.parents):
+                if (d / "CLAUDE.md").is_file() and (d / "NEOCORTEX").is_dir():
+                    if str(d) not in seen:
+                        seen.add(str(d))
+                        roots.append(d)
+                    break
+        except Exception:                   # EACCES on a component: this advisory scope must not crash the turn (a crash here
+            continue                        # dropped the armed block already collected: observed with T17 (l), 2026-11-10)
         if len(roots) >= 3:                 # bound the turn-end cost; 3 projects is already
             break                           # an unusual turn, and each costs ~0.3-1 s
     if roots:
@@ -1000,32 +1368,12 @@ def _text_of(content) -> str:
     return ""
 
 
-def _collect_results(tpath: str) -> dict:
-    """tool_use_id -> (is_error, text) for every tool_result (text = first 4 KB + last 4 KB).
-    Same bounded, fail-open pass as _collect_error_tool_use_ids, which it supersedes in main()."""
-    out = {}
-    fh = _safe_open_transcript(tpath)
-    if fh is None:
-        return out
-    try:
-        read_bytes = 0
-        for line in fh:
-            try:
-                entry = json.loads(line)
-            except Exception:
-                continue
-            for blk in (entry.get("message") or {}).get("content") or []:
-                if isinstance(blk, dict) and blk.get("type") == "tool_result" and blk.get("tool_use_id"):
-                    t = _text_of(blk.get("content"))
-                    truncated = len(t) > 8192             # Seat B B-14: a cut output never proves a pass
-                    if truncated:
-                        t = t[:4096] + "\n...\n" + t[-4096:]
-                    out[blk["tool_use_id"]] = (blk.get("is_error") is True, t, truncated)
-    except OSError:
-        return out
-    finally:
-        fh.close()
-    return out
+def _write_target(fp: str, cwd: str):
+    """The collector's one filter + qualification for a write target: None for an empty target (BSD `sed -i ''`) or a non-closeout
+    path, else the path qualified like R-3 (absolute as spelled; relative joined to its event's cwd, or left relative)."""
+    if not fp or _is_non_closeout_path(fp):
+        return None
+    return _qualify(fp, cwd)
 
 
 def _is_human_prompt(entry: dict) -> bool:
@@ -1038,6 +1386,17 @@ def _is_human_prompt(entry: dict) -> bool:
         return any(isinstance(b, dict) and b.get("type") == "text" for b in c) and \
             not any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c)
     return False
+
+
+def _qualify(fp: str, cwd: str) -> str:
+    """R-2 / R-3 path qualification, the one rule: an absolute path is kept as spelled; a relative one is joined to the cwd of the
+    event that wrote it with a plain separator join (no normpath, no realpath: `./` and `..` survive into the placement and the
+    hash). A `~` is a plain name here, as in receipt.qualify_path (s241 F-1; the Bash parser expands an unquoted one before this). A relative path whose event has no usable cwd (empty or not
+    absolute) stays relative: the placement rule reads a relative path as a resolution failure; the hook's own cwd is never used."""
+    import os
+    if os.path.isabs(fp) or fp.startswith(_UNRESOLVED) or not cwd or not os.path.isabs(cwd):
+        return fp
+    return os.path.join(cwd, fp)
 
 
 def _abs(fp: str, cwd: str) -> str:
@@ -1313,24 +1672,15 @@ def _h4c_advisories(session_key: str = "") -> list:
     return out
 
 
-def main() -> None:
-    try:
-        data = json.load(sys.stdin)
-    except Exception:
-        sys.exit(0)
-    if data.get("stop_hook_active"):
-        # B4-38 (reviewer A round 4): no second H1 block, but a governor change made during closeout recovery is still
-        # reported within the turn (bounded: the same H4c advisory as below).
-        try:
-            msgs = _h4c_advisories(_h4c_session_key(data))
-            if msgs:
-                print(json.dumps({"systemMessage": " | ".join(msgs)}))
-        except Exception as exc:
-            _log_error("stop_closeout_gate.h4c", exc)
-        sys.exit(0)
-    if _VR_ERR is not None:
-        _log_error("stop_closeout_gate.import.verifier_recognizer", _VR_ERR)
+class _Walk:
+    """What the walk of a ledger decided: the change-set and the windows main() judges."""
 
+    def __init__(self, edited_code, edited_since_verify, window_all, tamper_events, last_note, outside_notes, path_cwd):
+        self.edited_code, self.edited_since_verify, self.window_all = edited_code, edited_since_verify, window_all
+        self.tamper_events, self.last_note, self.outside_notes, self.path_cwd = tamper_events, last_note, outside_notes, path_cwd
+
+
+def _walk(ledger) -> "_Walk":
     # `edited_code` is the FULL session change-set (needed as-is by the VERIFY-armed receipt path
     # below). `edited_since_verify` is the window this gate judges: it accumulates on each qualifying
     # edit and is cleared by a verification whose OUTCOME is visible and good (H1, 2026-10-05) --
@@ -1341,17 +1691,17 @@ def main() -> None:
     tamper_events = []         # H2: (line_no, test_paths, code_paths)
     last_note = ""             # H1: why the last verifier seen did NOT clear the window
     outside_notes = []         # H1e (advisory): verifications that only named another project's tests
-    last_prompt_line = -1
-    last_text, last_text_line = "", -1
-    tpath = data.get("transcript_path", "")
-    results = _collect_results(tpath)
-    error_tool_use_ids = {k for k, v in results.items() if v[0]}
-    fh = _safe_open_transcript(tpath)
-    if fh is None:
-        sys.exit(0)   # F7: can't safely read the transcript -> no closeout assertion (fail-open)
+    results = ledger.results
+    line_no = -1
+
+    def _real_ok(tid) -> bool:
+        # v0.8 S-3: a call clears (an `rm`, a browser check) only on a REAL result that is not an error; no result, or a result
+        # only in a blob copy, clears nothing
+        return tid in results and not results[tid][0]
 
     def _wrote(fp: str, cwd: str) -> None:
-        if _is_non_closeout_path(fp):
+        fp = _write_target(fp, cwd)    # 2026-11-10 hot-fix: an empty target is never a write target; R-3: qualified by its own event's cwd
+        if fp is None:
             return
         path_cwd[fp] = cwd
         window_all.append(fp)
@@ -1371,145 +1721,205 @@ def main() -> None:
         window_all = [p for p in window_all if keep(p)]
         edited_since_verify = [p for p in edited_since_verify if keep(p)]
 
-    try:
-        import re
-        read_bytes = 0
-        line_no = -1
-        for line in fh:
-            line_no += 1
-            try:
-                entry = json.loads(line)
-            except Exception:
-                continue
-            if _is_human_prompt(entry):
-                last_prompt_line = line_no
-            msg = entry.get("message") or {}
-            cwd = str(entry.get("cwd") or "")
-            if entry.get("type") == "assistant":
-                for blk in msg.get("content") or []:
-                    if isinstance(blk, dict) and blk.get("type") == "text" and blk.get("text"):
-                        last_text, last_text_line = blk["text"], line_no
-            for blk in msg.get("content") or []:
-                if not isinstance(blk, dict) or blk.get("type") != "tool_use":
-                    continue
-                tid = blk.get("id")
-                failed = tid in error_tool_use_ids
-                name, ti = blk.get("name", ""), blk.get("input", {}) or {}
-                if name in ("Edit", "Write", "NotebookEdit", "MultiEdit"):   # A3 F-02: MultiEdit edits too
-                    if failed:
-                        continue   # the tool call itself failed — nothing was actually written
-                    _wrote(str(ti.get("file_path") or ti.get("notebook_path") or ""), cwd)   # S4-44
+    for ev in ledger.events:
+        line_no = ev["line"]
+        uncertain, cwd = ev["blob"], ev["cwd"]
+        # v0.7.2: a record whose type is "api-request-blob" repeats earlier tool_use blocks and carries no cwd. No cwd is ever
+        # inferred: a real record with none keeps v0.7's rule (a relative path in it is a resolution failure).
+        # v0.7.3 / v0.8: the ledger already dropped every blob call whose real twin is in the SAME ledger; one left (`uncertain`) has
+        # no real twin: its write targets are recorded with NO cwd (an absolute path is placed normally; a relative one stays
+        # relative, a resolution failure, so it blocks: both fail closed) and it never clears, never verifies.
+        for blk in ev["blocks"]:
+            tid = blk["id"]
+            failed = tid in results and results[tid][0]
+            if uncertain and ledger.incomplete:
+                continue                    # v0.8 S-4: the read was not whole; the incomplete block is the outcome, nothing is classified
+            name, ti = blk["name"], blk["input"]
+            if uncertain:
+                # no real twin: record the possible write (no cwd) EVEN IF a result says error (v0.7.4 F-1: a result for an
+                # uncertain call is itself uncertain, so every write target is kept: fail closed), clear nothing, verify nothing
+                if name in ("Edit", "Write", "NotebookEdit", "MultiEdit"):
+                    _wrote(str(ti.get("file_path") or ti.get("notebook_path") or ""), "")   # v0.7.4 F-1: an error result still records it
                 elif name == "Bash":
-                    cmd = str(ti.get("command", ""))
-                    # M-13: a Bash command that WRITES a file counts like an Edit — unless the call
-                    # errored (tested decision, TestErroredToolCallNotCountedAsEdit). A3 F-02 / N32: when
-                    # an errored call contains a verifier, the writes in the segments BEFORE its first
-                    # verifier still count (`cat > x.py <<EOF … && pytest` whose pytest fails did write
-                    # x.py); segments from that verifier on may not have run, so they are not counted.
-                    # Seat B B-16: writes are read PER SEGMENT (newlines split), and a write placed
-                    # AFTER the last verifier of the command is re-armed after the clear below.
-                    declared = _declared_commands(cwd, edited_since_verify[-5:])
-                    runs = _vr.analyse(cmd, declared) if _vr is not None else []
-                    # §3a (PLAN v0.7, founder ruling 2026-10-06, option A): only a PLAIN verifier clears.
-                    plain, plain_why = _vr.plain_verifier(cmd, declared) if _vr is not None else (None, "")
-                    if plain is not None and ti.get("run_in_background"):
-                        # B3-06 (reviewer A round 3): a background launch's result is an acknowledgement, not the outcome
-                        plain, plain_why = None, "run in the background (its outcome is not in this result)"
-                    before_w, after_w = [], []
-                    if not failed or runs:
+                    ucmd = str(ti.get("command", ""))
+                    try:
                         try:
-                            segs = _vr.segments_full(cmd) if _vr is not None else None
+                            usegs = _vr.segments_full(ucmd) if _vr is not None else None
                         except ValueError:
-                            segs = None
-                        if segs:
-                            last_idx = max((r["index"] for r in runs), default=-1)
-                            first_idx = min((r["index"] for r in runs), default=-1)
-                            amap = {}                  # B5-18: assignments in ORDER, real statements only
-                            for k, seg in enumerate(segs):
-                                if failed and k >= first_idx:
-                                    break              # N32: from the first verifier on, the errored call may not have run
-                                if _record_assignments(seg[2], amap):
+                            usegs = None
+                        if usegs:
+                            # v0.8.1 (s282 F-1): the value a write sees is the one assigned BEFORE it (the real branch's ordered
+                            # map); a later re-assignment no longer makes the target ambiguous and dropped
+                            uamap = {}
+                            for useg in usegs:
+                                if _record_assignments(useg[2], uamap):
                                     continue
-                                tw = _resolve_vars(_bash_write_targets(" ".join(seg[2])), cmd, amap)
-                                (after_w if runs and k > last_idx else before_w).extend(tw)
-                        elif not failed:
-                            before_w = _resolve_vars(_bash_write_targets(cmd), cmd)
-                    for fp in before_w:
-                        _wrote(fp, cwd)
-                    # 2026-09-09 live incident: `rm` targets CLEAR a path from the pending sets.
-                    rm_targets = set(_resolve_vars(_bash_rm_targets(cmd), cmd)) if not failed else set()   # Seat A F4
-                    if rm_targets:
-                        edited_code = [p for p in edited_code if p not in rm_targets]
-                        edited_since_verify = [p for p in edited_since_verify if p not in rm_targets]
-                        window_all = [p for p in window_all if p not in rm_targets]
-                    if _vr is None:
-                        # B5-31 (reviewer A round 5): no degraded clearing. The recognizer was refused (modified, not
-                        # approved, not a regular file) or failed to load: nothing can show that a run passed, so
-                        # nothing clears until the hooks are re-approved; the block says why.
-                        last_note = ("the H1 recognizer is unavailable (" + (type(_VR_ERR).__name__ if _VR_ERR else "?")
-                                     + "), so no verification can clear until the hooks are re-approved at a "
-                                       "founder-visible landing (.claude/hooks/hook_support.py --write-approved)")
-                        continue
-                    if plain is not None:
-                        absent = tid not in results
-                        is_err, text, truncated = results.get(tid, (False, "", False))
-                        # Seat A F17 (declined, tested): a call with NO recorded result clears like
-                        # before; §3a keeps that contract for the plain form only.
-                        verdict = "pass" if absent else _vr.plain_verdict(plain["kind"], text)
-                        if (verdict == "pass" and truncated and plain["kind"].split(":")[-1] not in _vr.SUMMARY_KINDS
-                                and plain["kind"] not in _vr.SYNTAX_KINDS):
-                            # B3-05: a repo script clears on "no failure line"; a truncated result cannot show that
-                            verdict = "unknown"
-                        if is_err or verdict == "fail":
-                            last_note = "the last verification run FAILED"
-                        elif verdict == "empty":
-                            last_note = "the last verification run collected/ran NO tests"
-                        elif verdict != "pass":
-                            last_note = (f"the last verification ({plain['kind']}) showed no complete runner "
-                                         f"summary of tests that ran"
-                                         f"{' (its output was truncated)' if truncated else ''}")
+                                for fp in _resolve_vars(_bash_write_targets(" ".join(useg[2])), ucmd, uamap):
+                                    _wrote(fp, "")
                         else:
-                            paths = [_abs(p, cwd) for p in plain["paths"]]
-                            # Project relatedness (H1e) is ADVISORY: a run whose explicit paths all lie in
-                            # another project still clears, but is reported (P6 replay: precision unproven).
-                            if paths and edited_since_verify:
-                                troots = [_project_root_of(p) for p in paths]
-                                unrelated = [p for p in edited_since_verify
-                                             if not any(_related(_project_root_of(_abs(p, path_cwd.get(p, ""))), t) for t in troots)]
-                                if unrelated and len(unrelated) == len(edited_since_verify):
-                                    outside_notes.append((line_no, ", ".join(sorted(set(unrelated))[:2])))
-                            _clear(lambda p: False)
-                            last_note = ""
-                    elif runs:
-                        last_note = (f"the last verification was not a plain verifier command ({plain_why}); "
-                                     f"run your tests on their own")
-                    for fp in after_w:
-                        _wrote(fp, cwd)
-                elif name in BROWSER_VERIFY_TOOLS:
-                    if not failed:                    # Seat B B-17: only a SUCCESSFUL inspection clears
-                        # S4-43 (final): and only WEB assets — a page read is no test of backend code.
-                        _clear(lambda p: not p.lower().endswith(BROWSER_CLEARS))
-                elif name == "mcp__Claude_Browser__computer" and ti.get("action") == "screenshot":
-                    if not failed:
-                        _clear(lambda p: not p.lower().endswith(BROWSER_CLEARS))   # a screenshot is inspection; a click/type is not
-    except OSError:
+                            for fp in _resolve_vars(_bash_write_targets(ucmd), ucmd):
+                                _wrote(fp, "")
+                    except Exception:
+                        pass
+                continue
+            if name in ("Edit", "Write", "NotebookEdit", "MultiEdit"):   # A3 F-02: MultiEdit edits too
+                if failed:
+                    continue   # the tool call itself failed — nothing was actually written
+                _wrote(str(ti.get("file_path") or ti.get("notebook_path") or ""), cwd)   # S4-44
+            elif name == "Bash":
+                cmd = str(ti.get("command", ""))
+                # M-13: a Bash command that WRITES a file counts like an Edit — unless the call
+                # errored (tested decision, TestErroredToolCallNotCountedAsEdit). A3 F-02 / N32: when
+                # an errored call contains a verifier, the writes in the segments BEFORE its first
+                # verifier still count (`cat > x.py <<EOF … && pytest` whose pytest fails did write
+                # x.py); segments from that verifier on may not have run, so they are not counted.
+                # Seat B B-16: writes are read PER SEGMENT (newlines split), and a write placed
+                # AFTER the last verifier of the command is re-armed after the clear below.
+                declared = _declared_commands(cwd, edited_since_verify[-5:])
+                runs = _vr.analyse(cmd, declared) if _vr is not None else []
+                # §3a (PLAN v0.7, founder ruling 2026-10-06, option A): only a PLAIN verifier clears.
+                plain, plain_why = _vr.plain_verifier(cmd, declared) if _vr is not None else (None, "")
+                if plain is not None and ti.get("run_in_background"):
+                    # B3-06 (reviewer A round 3): a background launch's result is an acknowledgement, not the outcome
+                    plain, plain_why = None, "run in the background (its outcome is not in this result)"
+                before_w, after_w = [], []
+                if not failed or runs:
+                    try:
+                        segs = _vr.segments_full(cmd) if _vr is not None else None
+                    except ValueError:
+                        segs = None
+                    if segs:
+                        last_idx = max((r["index"] for r in runs), default=-1)
+                        first_idx = min((r["index"] for r in runs), default=-1)
+                        amap = {}                  # B5-18: assignments in ORDER, real statements only
+                        for k, seg in enumerate(segs):
+                            if failed and k >= first_idx:
+                                break              # N32: from the first verifier on, the errored call may not have run
+                            if _record_assignments(seg[2], amap):
+                                continue
+                            tw = _resolve_vars(_bash_write_targets(" ".join(seg[2])), cmd, amap)
+                            (after_w if runs and k > last_idx else before_w).extend(tw)
+                    elif not failed:
+                        before_w = _resolve_vars(_bash_write_targets(cmd), cmd)
+                for fp in before_w:
+                    _wrote(fp, cwd)
+                # 2026-09-09 live incident: `rm` targets CLEAR a path from the pending sets.
+                rm_targets = {_qualify(p, cwd) for p in _resolve_vars(_bash_rm_targets(cmd), cmd)} if _real_ok(tid) else set()   # Seat A F4; s239 H-2: qualified like the writes; v0.8 S-3: only a real, non-error result clears
+                rm_targets = {p for p in rm_targets if os.path.isabs(p)}   # v0.7.3 (s259 F-1): an rm still relative (no cwd) clears nothing
+                if rm_targets:
+                    edited_code = [p for p in edited_code if p not in rm_targets]
+                    edited_since_verify = [p for p in edited_since_verify if p not in rm_targets]
+                    window_all = [p for p in window_all if p not in rm_targets]
+                if _vr is None:
+                    # B5-31 (reviewer A round 5): no degraded clearing. The recognizer was refused (modified, not
+                    # approved, not a regular file) or failed to load: nothing can show that a run passed, so
+                    # nothing clears until the hooks are re-approved; the block says why.
+                    last_note = ("the H1 recognizer is unavailable (" + (type(_VR_ERR).__name__ if _VR_ERR else "?")
+                                 + "), so no verification can clear until the hooks are re-approved at a "
+                                   "founder-visible landing (.claude/hooks/hook_support.py --write-approved)")
+                    continue
+                if plain is not None:
+                    absent = tid not in results
+                    is_err, text, truncated = results.get(tid, (False, "", False))
+                    # Seat A F17 (declined, tested): a call with NO recorded result clears like
+                    # before; §3a keeps that contract for the plain form only.
+                    # v0.7.3: a missing result stays a pass, EXCEPT when a result for this id exists only in a blob copy:
+                    # that is a result we cannot trust, not an absent one (a blob-only result is not evidence of success)
+                    verdict = ("unknown" if (absent and tid in ledger.blob_result_ids)
+                               else "pass" if absent else _vr.plain_verdict(plain["kind"], text))
+                    if (verdict == "pass" and truncated and plain["kind"].split(":")[-1] not in _vr.SUMMARY_KINDS
+                            and plain["kind"] not in _vr.SYNTAX_KINDS):
+                        # B3-05: a repo script clears on "no failure line"; a truncated result cannot show that
+                        verdict = "unknown"
+                    if is_err or verdict == "fail":
+                        last_note = "the last verification run FAILED"
+                    elif verdict == "empty":
+                        last_note = "the last verification run collected/ran NO tests"
+                    elif verdict != "pass":
+                        last_note = (f"the last verification ({plain['kind']}) showed no complete runner "
+                                     f"summary of tests that ran"
+                                     f"{' (its output was truncated)' if truncated else ''}")
+                    else:
+                        paths = [_abs(p, cwd) for p in plain["paths"]]
+                        # Project relatedness (H1e) is ADVISORY: a run whose explicit paths all lie in
+                        # another project still clears, but is reported (P6 replay: precision unproven).
+                        if paths and edited_since_verify:
+                            troots = [_project_root_of(p) for p in paths]
+                            unrelated = [p for p in edited_since_verify
+                                         if not any(_related(_project_root_of(_abs(p, path_cwd.get(p, ""))), t) for t in troots)]
+                            if unrelated and len(unrelated) == len(edited_since_verify):
+                                outside_notes.append((line_no, ", ".join(sorted(set(unrelated))[:2])))
+                        _clear(lambda p: False)
+                        last_note = ""
+                elif runs:
+                    last_note = (f"the last verification was not a plain verifier command ({plain_why}); "
+                                 f"run your tests on their own")
+                for fp in after_w:
+                    _wrote(fp, cwd)
+            elif name in BROWSER_VERIFY_TOOLS:
+                if _real_ok(tid):                  # Seat B B-17: only a SUCCESSFUL inspection clears
+                    # S4-43 (final): and only WEB assets — a page read is no test of backend code.
+                    _clear(lambda p: not p.lower().endswith(BROWSER_CLEARS))
+            elif name == "mcp__Claude_Browser__computer" and ti.get("action") == "screenshot":
+                if _real_ok(tid):
+                    _clear(lambda p: not p.lower().endswith(BROWSER_CLEARS))   # a screenshot is inspection; a click/type is not
+    return _Walk(edited_code, edited_since_verify, window_all, tamper_events, last_note, outside_notes, path_cwd)
+
+
+
+def main() -> None:
+    try:
+        data = json.load(sys.stdin)
+    except Exception:
         sys.exit(0)
-    finally:
-        fh.close()
+    if data.get("stop_hook_active"):
+        # B4-38 (reviewer A round 4): no second H1 block, but a governor change made during closeout recovery is still
+        # reported within the turn (bounded: the same H4c advisory as below).
+        try:
+            msgs = _h4c_advisories(_h4c_session_key(data))
+            if msgs:
+                print(json.dumps({"systemMessage": " | ".join(msgs)}))
+        except Exception as exc:
+            _log_error("stop_closeout_gate.h4c", exc)
+        sys.exit(0)
+    if _VR_ERR is not None:
+        _log_error("stop_closeout_gate.import.verifier_recognizer", _VR_ERR)
+
+    tpath = data.get("transcript_path", "")
+    ledger = _read_ledger(tpath)
+    if ledger is None:
+        sys.exit(0)   # F7: can't safely read the transcript -> no closeout assertion (fail-open)
+    walk = _walk(ledger)
+    edited_code, edited_since_verify, window_all = walk.edited_code, walk.edited_since_verify, walk.window_all
+    tamper_events, last_note, outside_notes = walk.tamper_events, walk.last_note, walk.outside_notes
+    last_prompt_line, last_text, last_text_line = ledger.last_prompt_line, ledger.last_text, ledger.last_text_line
+
 
     blocked, missing = (_blocked_report(last_text) if last_text_line > last_prompt_line else (False, []))
     problems, advisories = [], []
+    if ledger.incomplete:
+        # v0.8 S-4 (decision D-8.1): a read that was not whole is never read as "nothing happened". It blocks, first, whatever else was
+        # found in what was read (those problems follow it).
+        problems.append(f"TRANSCRIPT READ INCOMPLETE ({'; '.join(ledger.incomplete)}): the gate cannot tell which edits were made or "
+                        f"verified; continue in a new session (write the handoff first)")
     if edited_code:
-        if _verify_armed(edited_code):
+        vstate = _verify_state(edited_code)
+        if vstate["armed"]:
             # VERIFY-armed: require an un-fabricable independent-verification receipt for the
             # WHOLE session change-set. Keyed on `edited_code` (full session), not the rolling
-            # window: a receipt attests the entire change-set at once. (Dormant: no project armed.)
+            # window: a receipt attests the entire change-set at once. A project is armed by its own
+            # `.verify/armed` marker (receipt.project_root); one without the marker gets the ordinary gate.
             sample = ", ".join(sorted(set(edited_code))[:3])
-            if not _has_valid_receipt(edited_code, sorted(set(edited_code))):
-                problems.append(
-                    f"VERIFY-GATE (armed): code was edited ({sample}…) with no valid independent-"
-                    f"verification receipt for this change-set — run the verify gate "
-                    f"(_skills/verify_gate), or state why verification is impossible (Art. 1)")
+            if vstate["block"]:
+                problems.append(f"VERIFY-GATE (armed): code was edited ({sample}…); {vstate['block']}")
+            else:
+                r_ok, r_why = _has_valid_receipt(edited_code, sorted(set(edited_code)), vstate)
+                if not r_ok:
+                    problems.append(
+                        f"VERIFY-GATE (armed): code was edited ({sample}…) with no valid independent-"
+                        f"verification receipt for this change-set — run the verify gate "
+                        f"(_skills/verify_gate), or state why verification is impossible (Art. 1)"
+                        + (f"; receipt: {r_why}" if r_why else ""))
         elif edited_since_verify:
             sample = ", ".join(sorted(set(edited_since_verify))[:3])
             if blocked and not missing:
@@ -1570,9 +1980,6 @@ def main() -> None:
     except Exception as exc:
         _log_error("stop_closeout_gate.h2", exc)
 
-    if _TRUNCATED[0]:
-        advisories.append(f"TRANSCRIPT TRUNCATED (S4-55): only the last {TRANSCRIPT_CAP // (1024 * 1024) or 1} MB of the "
-                          f"session were read; edits older than that are not judged")
     current = [note for ln_no, note in outside_notes if ln_no > last_prompt_line]
     if current:
         advisories.append(f"VERIFY SCOPE (H1e, advisory): a verification named only another project's "
@@ -1612,13 +2019,22 @@ def main() -> None:
     # the turn; echoed to stderr so they are not silently swallowed. Scoped to the projects
     # EDITED this turn: resolving from cwd skips them entirely whenever the session is rooted
     # at the workspace root, which is where governance work happens.
+    # ONE wall-clock budget for the whole loop (all roots together), founder ruling 2026-11-11:
+    # slot 153 measured 28.7 s of side checks against this hook's 20 s limit. Each child's
+    # timeout is the remainder (min 0.5 s); once spent, the rest are skipped and said so.
+    budget_s, t_start, skipped = 5.0, time.monotonic(), 0
     for proj_root in _advisory_roots(edited_code, journal_root):
-        for marker, text, howto in (
-            ("CLOSEOUT-ADVISORY", _continuity_advisory(proj_root),
+        for marker, check, howto in (
+            ("CLOSEOUT-ADVISORY", _continuity_advisory,
              "governance/scripts/continuity_sweep.py --project"),
-            ("CLOSEOUT-STALENESS", _staleness_advisory(proj_root),
+            ("CLOSEOUT-STALENESS", _staleness_advisory,
              "governance/scripts/closeout_lint.py --path"),
         ):
+            remaining = budget_s - (time.monotonic() - t_start)
+            if remaining <= 0:
+                skipped += 1
+                continue
+            text = check(proj_root, timeout=max(0.5, remaining))
             if not text:
                 continue
             try:
@@ -1629,6 +2045,14 @@ def main() -> None:
                 pass
             print(f"{marker} (non-blocking) {proj_root.name}: {text} — "
                   f"run {howto} '{proj_root}' for detail", file=sys.stderr)
+    if skipped:
+        line = f"CLOSEOUT-ADVISORY skipped: side-check budget 5 s spent ({skipped} skipped)"
+        try:
+            _safe_append(ROOT, ("governance", "pilot_telemetry.log"),
+                         f"{datetime.datetime.now().isoformat(timespec='seconds')} {line}\n")
+        except OSError:
+            pass
+        print(line, file=sys.stderr)
     sys.exit(0)
 
 

@@ -25,6 +25,11 @@ import sys
 import time
 import uuid
 
+import core  # sibling module: the hooks pre-register it from approved bytes (GF-1); the CLIs put this folder on sys.path
+
+SCHEMA_V1 = "verify_gate.receipt.v1"
+SCHEMA_V2 = "verify_gate.receipt.v2"
+_MAX_READ = 64 * 1024 * 1024  # a verdict, attestation, ledger or changed file larger than this is refused
 DEFAULT_WINDOW_S = 3600  # a receipt older than this is stale even if the change-set matches
 FUTURE_SKEW_S = 300      # a receipt stamped further ahead than this is invalid (it would never go stale)
 _NONCE = re.compile(r"[0-9a-f]{32}")  # the form of uuid4().hex, as write_receipt mints it
@@ -36,30 +41,79 @@ class LedgerError(Exception):
     """The consumed-nonce ledger cannot be trusted or written; the caller fails closed."""
 
 
+class UnsafeFile(Exception):
+    """A file the validator must read is a link, a FIFO, hard-linked, too large or otherwise not a plain file."""
+
+
+def _safe_read(path: str) -> tuple[bytes, float] | None:
+    """Read `path` once: no symlink in ANY component (absolute walk from `/`, O_NOFOLLOW), a regular file with one
+    link, opened non-blocking so a FIFO fails at once (pattern of verify_fires.py `_safe_read_text`, R-2).
+    Returns (bytes, mtime) or None when a component or the file is absent; raises UnsafeFile otherwise."""
+    full = path if os.path.isabs(path) else os.path.join(os.getcwd(), path)
+    parts = [x for x in full.split(os.sep) if x and x != "."]   # ".." is left to the kernel, never folded lexically
+    if not parts:
+        raise UnsafeFile(f"{path}: not a file")
+    dfd = os.open(os.sep, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in parts[:-1]:
+            try:
+                nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dfd)
+            except FileNotFoundError:
+                return None
+            except OSError as e:
+                raise UnsafeFile(f"{path}: unsafe path component {part!r} ({e})") from e
+            os.close(dfd)
+            dfd = nfd
+        try:
+            fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+        except FileNotFoundError:
+            return None
+        except OSError as e:
+            raise UnsafeFile(f"{path}: refused ({e})") from e
+        try:
+            try:
+                st = os.fstat(fd)
+                if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_size > _MAX_READ:
+                    raise UnsafeFile(f"{path}: not a regular single-link file of bounded size")
+                chunks, total = [], 0
+                while True:
+                    b = os.read(fd, 65536)
+                    if not b:
+                        break
+                    total += len(b)
+                    if total > _MAX_READ:     # a running cap: a file that grows under the read cannot run past the bound (s232 F-5)
+                        raise UnsafeFile(f"{path}: grew past the {_MAX_READ}-byte bound while being read")
+                    chunks.append(b)
+                after = os.fstat(fd)
+                if (after.st_size, after.st_mtime_ns, after.st_ino) != (st.st_size, st.st_mtime_ns, st.st_ino) \
+                        or total != st.st_size:
+                    raise UnsafeFile(f"{path}: modified while being read")
+                return b"".join(chunks), st.st_mtime
+            except OSError as e:     # a read or fstat failure (EIO, EINTR, ...) refuses like every other unsafe shape (s241 F-4)
+                raise UnsafeFile(f"{path}: read failed ({e})") from e
+        finally:
+            os.close(fd)
+    finally:
+        os.close(dfd)
+
+
+def _safe_read_bytes(path: str) -> bytes | None:
+    r = _safe_read(path)
+    return None if r is None else r[0]
+
+
+def qualify_path(path: str) -> str:
+    """R-2 path qualification (one rule): an absolute path is kept as spelled; a relative one is joined to the caller's cwd with a
+    plain separator join: no `normpath`, no `realpath`, so `./` and `..` survive into the hash and into the resolved walk."""
+    return path if os.path.isabs(path) else os.path.join(os.getcwd(), path)
+
+
 def changeset_sha256(paths: list[str]) -> str:
     """Hash the content of the changed files, sorted by path. Any edit to any file flips it,
-    so a receipt for change-set A cannot satisfy a gate over change-set B."""
-    h = hashlib.sha256()
-    for p in sorted(paths):
-        h.update(p.encode("utf-8"))
-        h.update(b"\0")
-        try:
-            # O_NONBLOCK: opening a FIFO must not wait for a writer (0.3.1, VG-5). A non-regular file is
-            # hashed as a marker and never read; a directory stays "<missing>", as when it was opened with open().
-            fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK)
-        except OSError:
-            h.update(b"<missing>")
-        else:
-            with os.fdopen(fd, "rb") as fh:
-                mode = os.fstat(fh.fileno()).st_mode
-                if stat.S_ISREG(mode):
-                    h.update(hashlib.sha256(fh.read()).digest())
-                elif stat.S_ISDIR(mode):
-                    h.update(b"<missing>")
-                else:
-                    h.update(b"<non-regular>")
-        h.update(b"\0")
-    return h.hexdigest()
+    so a receipt for change-set A cannot satisfy a gate over change-set B. Each file is read ONCE through `_safe_read` (the
+    same read validation performs): a link in any component, a FIFO, a folder or a hard-linked file raises UnsafeFile
+    (it hashed a FIFO as `<non-regular>` and a folder as `<missing>` before); an absent file is `<missing>`."""
+    return _hash_changed(paths)[0]
 
 
 @dataclasses.dataclass
@@ -70,7 +124,9 @@ class Receipt:
     ts: float
     attestation_ref: str
     nonce: str
-    schema: str = "verify_gate.receipt.v1"
+    verdict_ref: str = ""
+    attestation_sha256: str = ""
+    schema: str = SCHEMA_V2
 
     def as_dict(self) -> dict:
         return dataclasses.asdict(self)
@@ -81,16 +137,213 @@ def verdict_sha256(verdict_path: str) -> str:
         return hashlib.sha256(fh.read()).hexdigest()
 
 
+def issuable(verdict: dict, attestation: dict) -> tuple[bool, str]:
+    """R-1/R-2: the one predicate for issuing AND accepting a receipt. True only when core.evaluate returns PASS
+    with no block finding (a refutation, even an un-anchored one, never earns a receipt) AND the attestation makes the
+    verdict block-eligible (an un-anchored clean verdict earns none either)."""
+    try:
+        d = core.evaluate(verdict, attestation, require_blocking=False)
+        if d.exit_code != core.ExitCode.PASS:
+            return False, f"core.evaluate exit {d.exit_code} (not PASS)"
+        if d.block_findings:
+            return False, "the verdict holds a substantiated HIGH refutation"
+        if not core.block_eligible(attestation, verdict)[0]:
+            return False, "the verdict is not externally anchored (advisory only)"
+    except Exception as e:  # a malformed shape must refuse, not raise (one try around evaluate AND block_eligible, s238 F-9)
+        return False, f"verdict/attestation not evaluable: {type(e).__name__}"
+    return True, "issuable"
+
+
 def write_receipt(*, changed_paths: list[str], verdict_path: str, gate_exit: int,
                   attestation_ref: str) -> Receipt:
+    """Issue a v2 receipt. Both artifact refs are stored absolute and link-free (os.path.realpath); the verdict and the
+    attestation are each read once, evaluated with `issuable` and hashed from those same bytes. Raises UnsafeFile when an
+    artifact cannot be read, is missing, or is not issuable."""
+    v_ref, a_ref = os.path.realpath(verdict_path), os.path.realpath(attestation_ref)
+    vb, ab = _safe_read_bytes(v_ref), _safe_read_bytes(a_ref)
+    for ref, b in ((v_ref, vb), (a_ref, ab)):
+        if b is None:
+            raise UnsafeFile(f"{ref}: missing")      # s241 F-4: the one refusal contract (callers catch UnsafeFile)
+    # s241 F-2: the decision is taken on the very bytes that are hashed below, not on an earlier read of the same path
+    vobj, aobj = _json_obj(vb), _json_obj(ab)
+    if vobj is None or aobj is None:
+        raise UnsafeFile(f"{v_ref if vobj is None else a_ref}: not a JSON object")
+    ok, why = issuable(vobj, aobj)
+    if not ok:
+        raise UnsafeFile(f"not issuable from the bytes read for hashing: {why}")
     return Receipt(
         changeset_sha256=changeset_sha256(changed_paths),
-        verdict_sha256=verdict_sha256(verdict_path),
+        verdict_sha256=hashlib.sha256(vb).hexdigest(),
         gate_exit=gate_exit,
         ts=time.time(),
-        attestation_ref=attestation_ref,
+        attestation_ref=a_ref,
         nonce=uuid.uuid4().hex,
+        verdict_ref=v_ref,
+        attestation_sha256=hashlib.sha256(ab).hexdigest(),
     )
+
+
+def _rr_walk(path):
+    """Resolve an absolute, unnormalised `path` component by component with lstat/readlink only, as the kernel does (`..` applies
+    after a link; at most 40 links). ("ok", resolved) | ("absent", lexical placement from the nearest existing ancestor: ENOENT
+    or ENOTDIR on a component means the rest does not exist) | ("fail", None): ELOOP, EACCES, any other error, over 40 links."""
+    cur, links = [], 0
+    todo = [c for c in path.split("/") if c][::-1]
+    while todo:
+        c = todo.pop()
+        if c == ".":
+            continue
+        if c == "..":
+            if cur:
+                cur.pop()
+            continue
+        p = "/" + "/".join(cur + [c])
+        try:
+            st = os.lstat(p)
+        except (FileNotFoundError, NotADirectoryError):
+            return "absent", os.path.normpath("/" + "/".join(cur + [c] + todo[::-1]))
+        except OSError:
+            return "fail", None
+        if stat.S_ISLNK(st.st_mode):
+            links += 1
+            if links > 40:
+                return "fail", None
+            try:
+                target = os.readlink(p)
+            except OSError:
+                return "fail", None
+            if not target:
+                return "fail", None
+            if target.startswith("/"):
+                cur = []
+            todo.extend([x for x in target.split("/") if x][::-1])
+        else:
+            cur.append(c)
+    return "ok", "/" + "/".join(cur)
+
+
+def _rr_test_dir(d):
+    """Test one ancestor `d`: lstat of BOTH `d/NEOCORTEX` and `d/.verify`, always both. "absent" when either is ENOENT/ENOTDIR (`d` is
+    not a candidate; nothing is followed); "unreadable" when neither is proved absent and an error prevents deciding, or when a
+    candidate is malformed (a wrong type of NEOCORTEX, .verify or armed, a dangling or looping link, any error but ENOENT);
+    "unarmed" for a well-formed candidate with no `armed` (passed over); "armed" for NEOCORTEX folder + .verify folder + armed file."""
+    gone = err = False
+    for entry in ("NEOCORTEX", ".verify"):
+        try:
+            os.lstat(os.path.join(d, entry))
+        except (FileNotFoundError, NotADirectoryError):
+            gone = True
+        except OSError:
+            err = True
+    if gone:
+        return "absent"
+    if err:
+        return "unreadable"
+    try:
+        neo = os.stat(os.path.join(d, "NEOCORTEX")).st_mode
+        ver = os.stat(os.path.join(d, ".verify")).st_mode
+    except OSError:
+        return "unreadable"
+    if not (stat.S_ISDIR(neo) and stat.S_ISDIR(ver)):
+        return "unreadable"
+    marker = os.path.join(d, ".verify", "armed")
+    try:
+        os.lstat(marker)
+    except FileNotFoundError:
+        return "unarmed"
+    except OSError:
+        return "unreadable"
+    try:
+        return "armed" if stat.S_ISREG(os.stat(marker).st_mode) else "unreadable"
+    except OSError:
+        return "unreadable"
+
+
+def _rr_ancestors(start):
+    """From `start` up to `/`: ("unreadable", None) at the first unreadable candidate, ("armed", d) at the first armed root,
+    (None, None) when neither is met."""
+    d = start
+    while True:
+        state = _rr_test_dir(d)
+        if state == "unreadable":
+            return "unreadable", None
+        if state == "armed":
+            return "armed", d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None, None
+        d = parent
+
+
+def _rr_place(path):
+    """Place ONE path twice, lexically (normpath, `..` folded) and resolved (_rr_walk). Returns (kind, root, key) with kind in
+    "unreadable" | "ambiguous" | "root" | "none". In this order: an unreadable candidate met on either placement is unreadable;
+    an armed root from either placement is that root (one root spelled two ways, same device and inode, is one root; two
+    different ones are ambiguous); a resolution failure and no armed root found lexically is unreadable; otherwise "none".
+    A path that is not an absolute string is a resolution failure."""
+    if not isinstance(path, str) or not path.startswith("/") or "\0" in path:
+        return "unreadable", None, None
+    lexical = _rr_ancestors(os.path.dirname(os.path.normpath(path)))
+    how, placed = _rr_walk(path)
+    resolved = _rr_ancestors(os.path.dirname(placed)) if how != "fail" else (None, None)
+    if "unreadable" in (lexical[0], resolved[0]):
+        return "unreadable", None, None
+    roots = []
+    for state, d in (resolved, lexical):
+        if state == "armed":
+            try:
+                s = os.stat(d)
+            except OSError:
+                return "unreadable", None, None
+            if (s.st_dev, s.st_ino) not in [r[0] for r in roots]:
+                roots.append(((s.st_dev, s.st_ino), d))
+    if len(roots) > 1:
+        return "ambiguous", None, None
+    if roots:
+        return "root", roots[0][1], roots[0][0]
+    if how == "fail":
+        return "unreadable", None, None
+    return "none", None, None
+
+
+def _rr_scan(paths):
+    """Across paths: unreadable > ambiguous > root > none; two different roots among paths are ambiguous. Returns (kind, root)."""
+    try:
+        items = list(paths or [])
+    except Exception:
+        return "unreadable", None
+    roots, ambiguous = [], False
+    for fp in items:
+        try:
+            kind, d, key = _rr_place(fp)
+        except Exception:
+            return "unreadable", None
+        if kind == "unreadable":
+            return "unreadable", None
+        if kind == "ambiguous":
+            ambiguous = True
+        elif kind == "root" and key not in [r[0] for r in roots]:
+            roots.append((key, d))
+    if ambiguous or len(roots) > 1:
+        return "ambiguous", None
+    if roots:
+        return "root", roots[0][1]
+    return "none", None
+
+
+def project_root(changed_paths):
+    """R-3 (v0.7): the ONE project-root rule (the Stop gate and the CLI both call it; vg_probe and the gate's module-free probe
+    hold the same placement text). Returns (root, reason); never raises. Paths are absolute (a relative one is a resolution
+    failure). (root, "ok") when the paths that have an armed root all share one; (None, "no project root") when none has one;
+    (None, "ambiguous project root") when two differ; (None, "armed state unreadable") when uncertainty meets an armed or
+    candidate root, or a path cannot be resolved (uncertainty is never read as "not armed"). Precedence across paths:
+    unreadable > ambiguous > root > none. Placement is `_rr_place`: lexical and resolved, both entries of every ancestor read."""
+    import pathlib
+    kind, root = _rr_scan(changed_paths)
+    if kind == "root":
+        return pathlib.Path(root), "ok"
+    return None, {"unreadable": "armed state unreadable", "ambiguous": "ambiguous project root",
+                  "none": "no project root"}[kind]
 
 
 def _nonce_ok(nonce) -> bool:
@@ -98,23 +351,15 @@ def _nonce_ok(nonce) -> bool:
 
 
 def _load_ledger(ledger_path: str) -> set[str]:
-    """Absent = empty. Present but unreadable, not a regular file, hard-linked (st_nlink != 1), not a JSON list, or holding anything
-    but nonces of the uuid4().hex form => LedgerError (fail closed: it used to read as empty, which
-    revived every spent nonce and, on the next consume, erased the history)."""
+    """Absent = empty. Present but unreadable, not a regular file, hard-linked (st_nlink != 1), reached through a
+    link, not a JSON list, or holding anything but nonces of the uuid4().hex form => LedgerError (fail closed: it used to
+    read as empty, which revived every spent nonce and, on the next consume, erased the history). One safe read (R-2)."""
     try:
-        fd = os.open(ledger_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except FileNotFoundError:
-        return set()
-    except OSError as e:
-        raise LedgerError(f"nonce ledger unreadable: {ledger_path}") from e
-    try:
-        with os.fdopen(fd, "rb") as fh:
-            st = os.fstat(fh.fileno())
-            # st_nlink != 1: a second name for the ledger has its own lock file, so two locks guard one file
-            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
-                raise LedgerError(f"nonce ledger unreadable: {ledger_path}")
-            data = json.loads(fh.read().decode("utf-8"))
-    except (OSError, ValueError, RecursionError, MemoryError) as e:
+        raw = _safe_read_bytes(ledger_path)
+        if raw is None:
+            return set()
+        data = json.loads(raw.decode("utf-8"))
+    except (OSError, UnsafeFile, ValueError, RecursionError, MemoryError) as e:
         raise LedgerError(f"nonce ledger unreadable: {ledger_path}") from e
     if not isinstance(data, list) or not all(_nonce_ok(n) for n in data):
         raise LedgerError(f"nonce ledger unreadable: {ledger_path}")
@@ -246,16 +491,43 @@ def consume(nonce: str, ledger_path: str) -> None:
         _write_ledger(ledger_path, used, lock_fd)
 
 
+def _json_obj(raw: bytes):
+    try:
+        v = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError, MemoryError):
+        return None
+    return v if isinstance(v, dict) else None
+
+
+def _hash_changed(changed_paths: list[str]) -> tuple[str, float]:
+    """The change-set hash, same encoding as changeset_sha256, but each file is read ONCE through _safe_read: a link,
+    a FIFO or a multiply-linked file raises UnsafeFile (R-2: changed paths are not normalised, a link among them is
+    refused). Absent => "<missing>", as at issuance. Returns (hash, newest mtime)."""
+    h = hashlib.sha256()
+    newest = 0.0
+    for p in sorted(changed_paths):
+        h.update(p.encode("utf-8"))
+        h.update(b"\0")
+        r = _safe_read(p)
+        if r is None:
+            h.update(b"<missing>")
+        else:
+            h.update(hashlib.sha256(r[0]).digest())
+            newest = max(newest, r[1])
+        h.update(b"\0")
+    return h.hexdigest(), newest
+
+
 def _check(receipt: dict, *, changed_paths: list[str], ledger_path: str,
            window_s: int, now: float | None) -> tuple[bool, str, set[str] | None]:
+    """Order (R-2): schema and time window (no file read); the two artifacts; the change-set; the ledger."""
     now = time.time() if now is None else now
-    if not isinstance(receipt, dict) or receipt.get("schema") != "verify_gate.receipt.v1":
+    if isinstance(receipt, dict) and receipt.get("schema") == SCHEMA_V1:
+        return False, "re-issue under v2 (a v1 receipt is no longer accepted)", None
+    if not isinstance(receipt, dict) or receipt.get("schema") != SCHEMA_V2:
         return False, "bad receipt schema", None
     if receipt.get("gate_exit") not in (0,):
         return False, f"receipt records a non-pass gate_exit={receipt.get('gate_exit')}", None
-    cur = changeset_sha256(changed_paths)
-    if receipt.get("changeset_sha256") != cur:
-        return False, "change-set hash mismatch (work changed since the receipt)", None
     ts = receipt.get("ts", 0)
     if isinstance(ts, bool) or not isinstance(ts, (int, float)):
         return False, "bad receipt ts", None
@@ -269,16 +541,42 @@ def _check(receipt: dict, *, changed_paths: list[str], ledger_path: str,
         return False, f"receipt stale (> {window_s}s old)", None
     if ts - now > FUTURE_SKEW_S:
         return False, f"receipt stamped in the future (> {FUTURE_SKEW_S}s ahead)", None
-    newest = 0.0
-    for p in changed_paths:
-        try:
-            newest = max(newest, os.path.getmtime(p))
-        except OSError:
-            pass
-    if ts < newest:
-        return False, "receipt predates the newest changed file (edited after verification)", None
     if not _nonce_ok(receipt.get("nonce")):
         return False, "receipt nonce missing or malformed", None
+    refs = {k: receipt.get(k) for k in ("verdict_ref", "attestation_ref")}
+    for k, v in refs.items():
+        if not isinstance(v, str) or not os.path.isabs(v):
+            return False, f"receipt {k} missing or not absolute", None
+    shas = {k: receipt.get(k) for k in ("verdict_sha256", "attestation_sha256")}
+    parsed = {}
+    for ref_k, sha_k in (("verdict_ref", "verdict_sha256"), ("attestation_ref", "attestation_sha256")):
+        try:
+            raw = _safe_read_bytes(refs[ref_k])
+        except UnsafeFile as e:
+            return False, f"{ref_k} unsafe: {e}", None
+        except OSError as e:
+            return False, f"{ref_k} unreadable: {e}", None
+        if raw is None:
+            return False, f"{ref_k} missing", None
+        if hashlib.sha256(raw).hexdigest() != shas[sha_k]:
+            return False, f"{ref_k} changed since issuance ({sha_k} mismatch)", None
+        obj = _json_obj(raw)
+        if obj is None:
+            return False, f"{ref_k} is not a JSON object", None
+        parsed[ref_k] = obj
+    ok, why = issuable(parsed["verdict_ref"], parsed["attestation_ref"])
+    if not ok:
+        return False, f"decision re-derived from the artifacts refuses: {why}", None
+    try:
+        cur, newest = _hash_changed(changed_paths)
+    except UnsafeFile as e:
+        return False, f"changed path unsafe: {e}", None
+    except OSError as e:
+        return False, f"changed path unreadable: {e}", None
+    if receipt.get("changeset_sha256") != cur:
+        return False, "change-set hash mismatch (work changed since the receipt)", None
+    if ts < newest:
+        return False, "receipt predates the newest changed file (edited after verification)", None
     try:
         used = _load_ledger(ledger_path)
     except LedgerError:

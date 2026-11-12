@@ -8,8 +8,8 @@ receipt (bound to the change-set), and nothing the producer self-asserts.
 
 Usage:
   verify_gate.py --verdict V.json --attestation A.json [--require-blocking]
-                 [--changed f1 f2 ... --receipt R.json --ledger L.json]   # validate a receipt
-                 [--changed f1 f2 ... --write-receipt R.json --ledger L.json]  # emit one on PASS
+                 [--changed f1 f2 ... --receipt R.json]        # validate + spend a receipt (armed roots only)
+                 [--changed f1 f2 ... --write-receipt R.json]  # emit one on an anchored, clean PASS
                  [--override "<reason>"]            # human escape hatch: downgrade BLOCK->advisory
                  [--judge-unreachable]              # runner signals the judge could not be produced
 Exit codes: see core.ExitCode (0 pass/advisory · 1 block · 2 identity · 3 unanchored · 4 judge ·
@@ -47,12 +47,11 @@ def main(argv=None) -> int:
     ap.add_argument("--changed", nargs="*", default=[])
     ap.add_argument("--receipt")
     ap.add_argument("--write-receipt")
-    ap.add_argument("--ledger", default=None)
     ap.add_argument("--override", default=None)
     a = ap.parse_args(argv)
-
-    _base = a.verdict or a.receipt or "."
-    ledger = a.ledger or os.path.join(os.path.dirname(os.path.abspath(_base)), "_consumed_nonces.json")
+    # R-2 path qualification (one rule, both modes): an absolute path as spelled; a relative one joined to this process's cwd
+    # with a plain separator join (no normpath, no realpath), so `./` and `..` survive into the hash and the resolved walk.
+    a.changed = [receipt_mod.qualify_path(p) for p in a.changed]
 
     # (1) If a receipt is supplied, the gate's job is to validate IT for the current change-set.
     if a.receipt:
@@ -61,12 +60,19 @@ def main(argv=None) -> int:
         except (OSError, ValueError) as e:
             print(json.dumps({"decision": "receipt_unreadable", "error": str(e)}))
             return core.ExitCode.RECEIPT_INVALID
+        # R-3: the ledger is the project's, the one the Stop gate reads, derived from the changed files by the one root rule.
+        root, root_why = receipt_mod.project_root(a.changed)
+        if root is None:
+            print(json.dumps({"decision": root_why, "paths": list(a.changed)}))
+            return core.ExitCode.RECEIPT_INVALID
+        ledger = os.path.join(str(root), ".verify", "_consumed_nonces.json")
         # One locked call validates AND spends (0.3.0): two runs on one receipt on one ledger cannot both pass.
         ok, why = receipt_mod.validate_and_consume(rec, changed_paths=a.changed, ledger_path=ledger)
         if not ok:
             print(json.dumps({"decision": "receipt_invalid", "reason": why}))
             return core.ExitCode.RECEIPT_INVALID
-        print(json.dumps({"decision": "receipt_valid", "reason": why}))
+        print(json.dumps({"decision": "receipt_valid",
+                          "reason": why + "; spent: the Stop gate no longer accepts this receipt"}))
         return core.ExitCode.PASS
 
     # (2) Otherwise evaluate the verdict + attestation.
@@ -93,11 +99,21 @@ def main(argv=None) -> int:
         return core.ExitCode.PASS
 
     # On a clean PASS, optionally emit a change-set-bound receipt for a downstream closeout gate.
+    # R-1: only what an armed gate may accept (PASS, no block finding, block-eligible); anything else writes no receipt.
     if d.exit_code == core.ExitCode.PASS and a.write_receipt:
-        rec = receipt_mod.write_receipt(changed_paths=a.changed, verdict_path=a.verdict,
-                                        gate_exit=0, attestation_ref=a.attestation)
-        with open(a.write_receipt, "w", encoding="utf-8") as fh:
-            json.dump(rec.as_dict(), fh, indent=2)
+        issue_ok, issue_why = receipt_mod.issuable(verdict, attestation)
+        if issue_ok:
+            try:
+                rec = receipt_mod.write_receipt(changed_paths=a.changed, verdict_path=a.verdict,
+                                                gate_exit=0, attestation_ref=a.attestation)
+            except receipt_mod.UnsafeFile as e:
+                # R-2: issuance reads every file the way validation does, so it refuses every shape validation refuses.
+                print(json.dumps({"decision": f"receipt not issued, unsafe path: {e}", "paths": list(a.changed)}))
+                return core.ExitCode.RECEIPT_INVALID
+            with open(a.write_receipt, "w", encoding="utf-8") as fh:
+                json.dump(rec.as_dict(), fh, indent=2)
+        else:
+            print(f"verify_gate: no receipt written: {issue_why}", file=sys.stderr)
 
     print(json.dumps({"decision": _name(d.exit_code), **d.as_dict()}, indent=2))
     return d.exit_code

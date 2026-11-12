@@ -90,11 +90,12 @@ def _telemetry(event: str) -> None:
         pass
 
 
-def _edited_code_files(transcript_path: str) -> list[str]:
+def _real_tool_use_ids(transcript_path: str) -> set:
+    """v0.7.3: every tool_use id in a record whose type is not "api-request-blob" (bounded, safe open, fail-open to empty)."""
+    ids: set = set()
     fh = _safe_open_transcript(transcript_path)
     if fh is None:
-        return []
-    edited: list[str] = []
+        return ids
     try:
         read = 0
         for line in fh:
@@ -105,9 +106,41 @@ def _edited_code_files(transcript_path: str) -> list[str]:
                 entry = json.loads(line)
             except Exception:
                 continue
+            if not isinstance(entry, dict) or entry.get("type") == "api-request-blob":
+                continue
+            for blk in (entry.get("message") or {}).get("content") or []:
+                if isinstance(blk, dict) and blk.get("type") == "tool_use" and blk.get("id"):
+                    ids.add(blk["id"])
+    except OSError:
+        pass
+    finally:
+        fh.close()
+    return ids
+
+
+def _edited_code_files(transcript_path: str) -> list[str]:
+    fh = _safe_open_transcript(transcript_path)
+    if fh is None:
+        return []
+    edited: list[str] = []
+    real_ids = _real_tool_use_ids(transcript_path)      # v0.7.3: a blob copy is skipped only when a real record holds its call
+    try:
+        read = 0
+        for line in fh:
+            read += len(line)
+            if read > 64 * 1024 * 1024:
+                break
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            is_blob = isinstance(entry, dict) and entry.get("type") == "api-request-blob"
             for blk in (entry.get("message") or {}).get("content") or []:
                 if not isinstance(blk, dict) or blk.get("type") != "tool_use":
                     continue
+                if is_blob and blk.get("id") in real_ids:
+                    continue                   # v0.7.2/3: a stored copy of a tool_use the real records hold is not a second edit
+                # an unmatched blob tool_use is uncertain: counted like a real edit (advisory only; over-inclusion never blocks)
                 if blk.get("name") in ("Edit", "Write", "NotebookEdit"):
                     fp = str((blk.get("input") or {}).get("file_path", ""))
                     if fp.endswith(CODE_SUFFIXES) and os.path.isfile(fp):
@@ -117,6 +150,82 @@ def _edited_code_files(transcript_path: str) -> list[str]:
     finally:
         fh.close()
     return edited
+
+
+def _load_hook_support():
+    """hook_support.py from its approved bytes (lstat, regular, bounded, no link, no blocking open; exec from those bytes,
+    never the importer), the way stop_closeout_gate.py's `_load_sibling` loads it. The verify_gate loader and the
+    armed-ness probe live there (GF-1), so this hook carries no second copy of either. Raises on any refusal."""
+    import hashlib
+    import stat
+    import types
+    rel = ".claude/hooks/hook_support.py"
+    path = ROOT / rel
+    st = os.lstat(path)
+    if not stat.S_ISREG(st.st_mode) or st.st_size > 4_000_000:
+        raise RuntimeError("hook_support.py: not a regular file of bounded size")
+    want = None
+    for ln in (ROOT / "governance" / "hooks_approved.sha256").read_text(encoding="utf-8", errors="replace").splitlines():
+        parts = ln.strip().split(None, 1)
+        if len(parts) == 2 and parts[1].strip() == rel:
+            want = parts[0]
+    if want is None:
+        raise RuntimeError("hook_support.py: no approved entry")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RuntimeError("hook_support.py: changed type while opening")
+        chunks, total = [], 0
+        while total <= 4_000_000:
+            b = os.read(fd, 65536)
+            if not b:
+                break
+            chunks.append(b)
+            total += len(b)
+    finally:
+        os.close(fd)
+    data = b"".join(chunks)
+    if "{}:{:o}".format(hashlib.sha256(data).hexdigest(), st.st_mode & 0o7777) != want:
+        raise RuntimeError("hook_support.py: bytes differ from the approved list")
+    mod = types.ModuleType("hook_support")
+    mod.__file__ = str(path)
+    exec(compile(data, str(path), "exec", dont_inherit=True), mod.__dict__)
+    return mod
+
+
+def _advisory_outcome(edited: list):
+    """(verified, reason) for this turn, GF-1(d)'s advisory column. Never raises, never blocks. `reason` is "" when the
+    plain PENDING text applies (a receipt is missing or not valid at an armed-or-not root), else the table's text."""
+    try:
+        hs = _load_hook_support()
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            raise
+        return False, "verify_gate script failed: hook_support: %s: %s" % (type(exc).__name__, str(exc)[:160])
+    res = hs.vg_resolve(ROOT, edited)
+    if not res["ok"]:
+        try:
+            hs.vg_probe(edited)
+        except BaseException as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                raise
+            return False, "verify_gate armed state unreadable"
+        return False, res["text"]
+    root = res["root"]
+    if root is None:
+        return False, res["reason"]       # "no project root" or "ambiguous project root"
+    try:
+        rpath = root / ".verify" / "receipt.json"
+        ledger = str(root / ".verify" / "_consumed_nonces.json")
+        if not rpath.is_file():
+            return False, ""
+        rec = json.loads(rpath.read_text(encoding="utf-8"))
+        ok, _why = res["mods"]["receipt"].validate_receipt(rec, changed_paths=sorted(set(edited)), ledger_path=ledger)
+        return bool(ok), ""
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            raise
+        return False, "verify_gate script failed: receipt: %s: %s" % (type(exc).__name__, str(exc)[:160])
 
 
 def main() -> None:
@@ -131,28 +240,28 @@ def main() -> None:
     if not edited:
         sys.exit(0)  # no code edits this turn — nothing to verify
 
-    # Look for a valid VERIFY-RECEIPT for exactly these files. (verify_gate is a workspace skill;
-    # absence of the skill or any error => advisory PENDING, never a failure.)
-    verified = False
-    try:
-        sys.path.insert(0, str(ROOT / "_skills" / "verify_gate" / "scripts"))
-        import receipt as receipt_mod  # type: ignore
-        rpath = Path(os.getcwd()) / ".verify" / "receipt.json"
-        ledger = str(Path(os.getcwd()) / ".verify" / "_consumed_nonces.json")
-        if rpath.is_file():
-            rec = json.loads(rpath.read_text(encoding="utf-8"))
-            ok, _ = receipt_mod.validate_receipt(rec, changed_paths=sorted(set(edited)), ledger_path=ledger)
-            verified = bool(ok)
-    except Exception:
-        verified = False
+    # Look for a valid VERIFY-RECEIPT for exactly these files, at the project root that receipt.project_root names from
+    # the edited paths (never the working directory, GF-2(c)). Any failure => advisory PENDING, never a failure.
+    verified, reason = _advisory_outcome(edited)
 
     if verified:
         _telemetry(f"VERIFY-PROVEN {len(edited)} file(s)")
     else:
         # Advisory only: record PENDING, never block, never warn the user.
-        _telemetry(f"VERIFY-PENDING (advisory) {len(edited)} edited, no valid receipt")
+        _telemetry(f"VERIFY-PENDING (advisory) {len(edited)} edited, no valid receipt" + (f": {reason}" if reason else ""))
     sys.exit(0)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except BaseException as _exc:         # fail-open like the Stop hook: no exception exits non-zero (GF-1(c))
+        if isinstance(_exc, KeyboardInterrupt):
+            raise
+        try:
+            _telemetry(f"VERIFY-PENDING (advisory) hook error: {type(_exc).__name__}")
+        except BaseException:
+            pass
+        sys.exit(0)

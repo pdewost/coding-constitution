@@ -225,6 +225,8 @@ def turn_events(entries: list, write_targets=None, extra_prefixes=()) -> list:
             start = i + 1
     results = {}
     for e in entries[start:]:
+        if isinstance(e, dict) and e.get("type") == "api-request-blob":
+            continue                           # v0.7.2: a blob copy is not an event
         for b in ((e.get("message") or {}).get("content") or []):
             if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id"):
                 results[b["tool_use_id"]] = (b.get("is_error") is True, _text_of(b.get("content")))

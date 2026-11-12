@@ -254,6 +254,18 @@ def _missing(block: str, clauses) -> list:
     return [c for c in clauses if c not in block]
 
 
+# receipt-v2 R-5 (PLAN_verify_gate_receipt_v2 v0.7, approved 2026-11-10): the FS-4h clause flips. The row now states the v2 receipt
+# and its two canonical limit sentences verbatim, and none of FS-4h's four v1 limit clauses remains (README or SKILL.md).
+_RV2_LIMIT_1 = 'on a local box a determined agent can still forge the whole evidence set (attestation, verdict, receipt), and single use is per project root: moving the ledger aside reopens every spent nonce. R-1 to R-4 close the accidental paths named above; they do not raise the cryptographic floor.'
+_RV2_LIMIT_2 = "A receipt does not prove what was reviewed: a genuine clean verdict and attestation, whatever they reviewed and however old, can be bound to any later change-set, any number of times, and an edit made while a review runs is not detected (planned: receipt-v3). Validation reads the changed files one after another, so an edit made during validation can pass. The Stop hook sees edits as the transcript spells them: a write under a scratch or temp exemption (an alias or a `..` escape into the project included), a `cd` inside a command, an unexpanded variable, or a link changed before the turn ends can escape the armed check. The hooks' import guard does not authenticate modules already in sys.modules; it refuses only an unverified module cached under a scripts-file name whose file lies in the scripts folder. The CLIs have no import guard."
+_FS4H_V1_CLAUSES = (
+    "does not yet record whether its review was independent",
+    "does not check that its verdict file still hashes to `verdict_sha256`",
+    "the CLI's ledger follows the receipt's folder",
+    "`CI=1` counts as an anchor",
+)
+
+
 def test_fs4h_the_verify_gate_row_states_the_receipt_contract_and_its_limits():
     row = _block("| **VERIFY-GATE** |")
     gone = _missing(row, (
@@ -262,13 +274,21 @@ def test_fs4h_the_verify_gate_row_states_the_receipt_contract_and_its_limits():
         "until it is spent once — by the CLI included",        # FS-1.6, s142 F5-2
         "the next Stop refuses it",                            # F5-2
         "a corrupt ledger invalidates every receipt",          # FS-1: fails closed
-        "does not yet record whether its review was independent",          # FS-4h clause 1
-        "does not check that its verdict file still hashes to `verdict_sha256`",  # clause 2
-        "the CLI's ledger follows the receipt's folder",       # clause 3
-        "`CI=1` counts as an anchor",                          # clause 4
+        "`verdict_ref`", "`attestation_sha256`",               # receipt-v2 R-2: what a v2 receipt records
+        "receipt mode serves armed roots only",                # receipt-v2 R-3
+        _RV2_LIMIT_1, _RV2_LIMIT_2,                            # receipt-v2 R-5, both canonical sentences, verbatim
     ))
     assert not gone, f"VERIFY-GATE row lacks: {gone}"
     assert "single-use receipt" not in row, "VERIFY-GATE row still calls the receipt single-use without its conditions"
+    stale = [c for c in _FS4H_V1_CLAUSES if c in row]
+    assert not stale, f"VERIFY-GATE row still states a v1 limit that receipt-v2 closed: {stale}"
+
+
+def test_fs4h_skill_md_no_longer_states_the_v1_receipt_limits():
+    skill = (ROOT / "_skills" / "verify_gate" / "SKILL.md").read_text(encoding="utf-8")
+    flat = " ".join(skill.split())
+    stale = [c for c in _FS4H_V1_CLAUSES if c in flat]
+    assert not stale, f"_skills/verify_gate/SKILL.md still states a v1 receipt limit: {stale}"
 
 
 def test_fs4d_the_known_limits_name_run_time_interpreter_code():
@@ -321,3 +341,42 @@ def test_v0132_no_adopter_is_told_to_re_approve_after_install():
     bullet = readme[readme.index("**A single project.**"):readme.index("**Several projects sharing one policy.**")]
     assert "--write-approved" not in bullet, "the single-project bullet still asks for a re-approval after install"
     assert "also rewrites its .claude/settings.json" not in readme, "adopt step 5 still says --apply rewrites the root's settings"
+
+
+# --- next public batch (constitution-publish, 2026-11-12): the 17 hook cases of 2026-11-09 (37 -> 54), receipt-v2 v0.8.1's
+# incomplete-read block, and the release note. The case count is read from the shipped test_hooks.sh, not typed twice.
+
+def _hook_case_count() -> int:
+    sh = (ROOT / "adapters" / "claude-code" / "test_hooks.sh").read_text(encoding="utf-8")
+    # a `check "..."` call (line start or after `;`), plus a case scored by hand ("anchor bounded": pass=$((pass+1)); echo "PASS ...")
+    return len(re.findall(r'(?:^|;)\s*check "', sh, re.M)) + len(re.findall(r'pass=\$\(\(pass\+1\)\); echo "PASS ', sh))
+
+
+def test_batch_the_readme_case_count_matches_test_hooks_sh():
+    n = _hook_case_count()
+    readme = _readme()
+    counts = [int(x) for x in re.findall(r"(\d+) fire/no-fire cases", readme)]
+    assert counts, "README.md names no fire/no-fire case count"
+    assert all(c == n for c in counts), f"README.md says {counts} fire/no-fire cases; test_hooks.sh has {n}"
+
+
+def test_batch_no_hook_is_said_to_lack_a_case():
+    flat = " ".join(_readme().split())
+    for stale in ("have no fire/no-fire case yet", "whose hooks have no fire/no-fire case yet", "Four hooks have no"):
+        assert stale not in flat, f"README.md still says a hook has no fire/no-fire case: {stale!r}"
+    selftest = _block("A hook that can't prove it fires is presumed dead")
+    gone = _missing(selftest, ("VERIFY-GATE", "SKILL-INDEX-REGEN", "session-record tripwire", "`cold start`"))
+    assert not gone, f"Self-test paragraph does not name the hooks the 2026-11-09 cases cover: {gone}"
+
+
+def test_batch_closeout_row_says_an_incomplete_read_blocks():
+    row = _block("| **CLOSEOUT-GATE** | agent tries to end the turn |")
+    gone = _missing(row, ("cannot read the whole transcript", "128 MiB", "a new session"))
+    assert not gone, f"CLOSEOUT-GATE row does not state the v0.8.1 incomplete-read block: {gone}"
+
+
+def test_batch_the_status_list_names_release_v0140():
+    assert "- **Release v0.14.0**" in _readme_section("Status & maturity"), "Status & maturity has no v0.14.0 release bullet"
+    gone = _missing(_block("- **Release v0.14.0**"), ("receipt v2", "re-issue", "verify_gate 0.4.0", "54",
+                                                      "TRANSCRIPT READ INCOMPLETE", "--init"))
+    assert not gone, f"v0.14.0 bullet does not name what changed: {gone}"
