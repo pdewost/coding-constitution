@@ -464,6 +464,12 @@ next change that adds a line must remove one or amend the budget, per Art. 11):
   v2 receipt still does not prove. The CLOSEOUT gate reads the whole transcript and blocks with TRANSCRIPT READ
   INCOMPLETE when it cannot. The self-test grows from 37 to 54 fire/no-fire cases (the four hooks that had none), and
   `neocortex_manifest.py --init` writes the five STATUS sections the spec requires.
+- **Release v0.14.1** (2026-11-13): the publish scanner gains five options: `--generic` adds shape patterns (MAC address,
+  private IP address, UUID, HomeKit setup code, serial-like token; documentation ranges never count), `--root` scans
+  another git repository without this one's built-in exceptions, `--terms` reads the private terms from a named file
+  (missing or unreadable: exit 2), `--exceptions` reads reviewed entries that each clear one pattern class on one line (an
+  entry that clears nothing fails the run), and `--counts-only` prints counts, never the matched text. Its tests are in
+  `tests/`. No hook or verify_gate change.
 - **Constitution** — v1.0, ratified 2026-06-10 after line-by-line + adversarial review; the Independence Preamble was added
   2026-06-20 and four changes were ratified 2026-10-27 (see Reviews). **NEOCORTEX_SPEC** and **UNIVERSAL_SKILL_SPEC** state
   their own versions and ratification dates in their headers.
