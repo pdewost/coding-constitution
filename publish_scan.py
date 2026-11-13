@@ -189,13 +189,14 @@ SELF = "publish_scan.py"
 
 # Round 2 (2026-10-09, after the s4h look). The scanner's own file used to be exempt from EVERY credential and identity pattern:
 # a key appended to it passed. Now it is exempt from the IDENTITY-class patterns only, and only on lines that belong to its own
-# PATTERNS / EXCEPTIONS tables (see _self_exempt_lines); credentials, private terms and identity strings anywhere else in it block.
+# PATTERNS / EXCEPTIONS tables (see _self_exempt); credentials, private terms and identity strings anywhere else in it block.
 IDENTITY_CLASS = frozenset({"absolute-home-path", "workspace-path", "owner-name", "contact-handle", "phone", "local-database"})
-# G1 (2026-11-13): under --generic the scanner's own tables of shapes and ranges are examples of what they hunt, too
-# (its private-range table holds private addresses). The same rule: those classes, on those tables' lines, and nowhere else.
-SELF_EXEMPT_CLASS = IDENTITY_CLASS | frozenset(GENERIC_PATTERNS)
-SELF_TABLES = ("PATTERNS", "EXCEPTIONS", "GENERIC_PATTERNS", "_MAC_DOC_PREFIX", "_DOC_V4", "_DOC_V6",
-               "_PRIVATE_V4", "_PRIVATE_V6")
+SELF_TABLES = ("PATTERNS", "EXCEPTIONS")
+# G1 (2026-11-13; narrowed after review the same day): under --generic the scanner's own tables of shapes and ranges are
+# examples of what they hunt (its private-range table holds private addresses). Exempt there: a match lying wholly inside
+# one STRING LITERAL of those assignments, for the identity and generic classes. Never a comment, nor other text on the line.
+SELF_LITERAL_TABLES = ("GENERIC_PATTERNS", "_MAC_DOC_PREFIX", "_DOC_V4", "_DOC_V6", "_PRIVATE_V4", "_PRIVATE_V6")
+SELF_LITERAL_CLASS = IDENTITY_CLASS | frozenset(GENERIC_PATTERNS)
 
 # Git objects are read as they are, never through `refs/replace/`: a replacement can show the scanner a clean blob where the
 # commit being published holds a key (F3). Both the flag and the environment variable, so a config cannot undo it.
@@ -234,26 +235,52 @@ def _views(data: bytes) -> list[str]:
     return views
 
 
-def _self_exempt_lines(text: str) -> set[int]:
-    """Line numbers (1-based) of the scanner's own PATTERNS and EXCEPTIONS tables, plus the comment lines directly above each.
+def _self_exempt(text: str) -> tuple[set[int], list[tuple[int, int]]]:
+    """What the scanner's own source may hold without a hit: (lines, spans).
+
+    lines: line numbers (1-based) of its PATTERNS and EXCEPTIONS tables, plus the comment lines directly above each.
+    spans: [start, end) character ranges of the string literals inside the SELF_LITERAL_TABLES assignments. A span is kept
+    only when the text it covers evaluates back to the literal's value, so a line-count disagreement exempts nothing.
     A source that does not parse exempts nothing: the gate then reports every pattern example in it, and blocks."""
+    bom = 1 if text.startswith("\ufeff") else 0
+    src = text[bom:]
     try:
-        tree = ast.parse(text[1:] if text.startswith("\ufeff") else text)   # a BOM changes no line number
+        tree = ast.parse(src)                     # a BOM changes no line number
     except (SyntaxError, ValueError):
-        return set()
-    lines, out = text.split("\n"), set()
+        return set(), []
+    lines, out, spans = text.split("\n"), set(), []
+    src_lines = src.split("\n")
+    starts = [0]
+    for ln in src_lines[:-1]:
+        starts.append(starts[-1] + len(ln) + 1)
+
+    def offset(lineno: int, col: int) -> int:     # ast columns count UTF-8 bytes
+        line = src_lines[lineno - 1]
+        return bom + starts[lineno - 1] + len(line.encode("utf-8")[:col].decode("utf-8", "ignore"))
+
     for node in tree.body:
         targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
-        if any(isinstance(t, ast.Name) and t.id in SELF_TABLES for t in targets):
+        names = {t.id for t in targets if isinstance(t, ast.Name)}
+        if names & set(SELF_TABLES):
             first = node.lineno
             while first > 1 and lines[first - 2].lstrip().startswith("#"):
                 first -= 1
             out.update(range(first, node.end_lineno + 1))
-    return out
+        if names & set(SELF_LITERAL_TABLES) and node.value is not None:
+            for sub in ast.walk(node.value):
+                if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                    a, b = offset(sub.lineno, sub.col_offset), offset(sub.end_lineno, sub.end_col_offset)
+                    try:
+                        same = ast.literal_eval(text[a:b]) == sub.value
+                    except (SyntaxError, ValueError):
+                        same = False
+                    if same:
+                        spans.append((a, b))
+    return out, spans
 
 
 def _scan_text(rel: str, text: str, patterns: dict, allowed: set,
-               self_lines: set | None = None, ext: dict | None = None) -> list[tuple[int, str, str]]:
+               self_ex: tuple | None = None, ext: dict | None = None) -> list[tuple[int, str, str]]:
     """(line, pattern, snippet) for every undeclared hit in `text`, which belongs to `rel`.
 
     A LINE is what lies between two '\\n' — git's notion, and the only one used here, for
@@ -268,6 +295,7 @@ def _scan_text(rel: str, text: str, patterns: dict, allowed: set,
     for ln in lines[:-1]:
         starts.append(starts[-1] + len(ln) + 1)
     out = []
+    self_lines, self_spans = self_ex if self_ex else (set(), [])
     for name, pat in patterns.items():
         for m in _matches(name, pat, text):
             i = bisect.bisect_right(starts, m.start()) - 1
@@ -275,9 +303,11 @@ def _scan_text(rel: str, text: str, patterns: dict, allowed: set,
             content = "\n".join(lines[i:j + 1]).strip()
             if (rel, name, content) in allowed:
                 continue
-            if self_lines and name in SELF_EXEMPT_CLASS and all(n in self_lines for n in range(i + 1, j + 2)):
+            if self_lines and name in IDENTITY_CLASS and all(n in self_lines for n in range(i + 1, j + 2)):
                 continue                           # the scanner's own tables name what they hunt
-            if ext is not None and _ext_cleared(ext, rel, content):
+            if name in SELF_LITERAL_CLASS and any(a <= m.start() and m.end() <= b for a, b in self_spans):
+                continue                           # ... and so do the string literals of its shape tables
+            if ext is not None and _ext_cleared(ext, rel, name, content):
                 continue
             out.append((i + 1, name, content[:90]))
     return out
@@ -287,7 +317,7 @@ def _scan_name(rel: str, patterns: dict, allowed: set, ext: dict | None = None) 
     """Pattern names that hit the PATH itself (F4: the path is content too)."""
     return [n for n, pat in patterns.items()
             if any(True for _ in _matches(n, pat, rel)) and (rel, n, rel) not in allowed
-            and not (ext is not None and _ext_cleared(ext, rel, rel))]
+            and not (ext is not None and _ext_cleared(ext, rel, n, rel))]
 
 
 
@@ -348,9 +378,9 @@ def _codename_pattern(root: pathlib.Path, terms_path: pathlib.Path | None = None
     return pats
 
 
-def _allowed() -> set:
+def _allowed(excs: list | None = None) -> set:
     """The declared-exception key set, shared by the tree scan and the history scan."""
-    return {(f, p, line.strip()) for f, p, line, _ in EXCEPTIONS}
+    return {(f, p, line.strip()) for f, p, line, _ in (EXCEPTIONS if excs is None else excs)}
 
 
 class BadExceptions(ValueError):
@@ -358,11 +388,13 @@ class BadExceptions(ValueError):
 
 
 def _load_exceptions(path: pathlib.Path) -> dict:
-    """Read an exceptions file: one `<path relative to --root><TAB><exact stripped line | sha256:<hex>>` per line.
+    """Read an exceptions file: one `<path relative to --root><TAB><pattern class><TAB><exact stripped line | sha256:<hex>>`
+    per line.
 
-    Lines starting with '#' and blank lines are ignored. Returns {(rel, key): False}; the value flips to True when
+    Lines starting with '#' and blank lines are ignored. Returns {(rel, class, key): False}; the value flips to True when
     the exception clears a hit (an exception that never does is STALE and fails the run). Raises BadExceptions if the
-    file is unreadable or a line does not parse. Unlike EXCEPTIONS, an entry here covers every pattern on that line."""
+    file is unreadable or a line does not parse. Like EXCEPTIONS, an entry clears ONE pattern class on that line: excepting
+    one shape must never exempt a secret that shares the line (review, 2026-11-13). main() checks each class exists."""
     try:
         raw = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as e:
@@ -371,20 +403,20 @@ def _load_exceptions(path: pathlib.Path) -> dict:
     for n, line in enumerate(raw.splitlines(), 1):
         if not line.strip() or line.lstrip().startswith("#"):
             continue
-        if "\t" not in line:
-            raise BadExceptions(f"--exceptions line {n}: expected <path><TAB><line text or sha256:hex>")
-        rel, key = line.split("\t", 1)
-        key = key.strip()
+        parts = line.split("\t", 2)
+        if len(parts) != 3 or not parts[0].strip() or not parts[1].strip():
+            raise BadExceptions(f"--exceptions line {n}: expected <path><TAB><pattern class><TAB><line text or sha256:hex>")
+        rel, cls, key = parts[0].strip(), parts[1].strip(), parts[2].strip()
         if key.startswith("sha256:"):
             key = key[7:].lower()
-        out[(rel.strip(), key)] = False
+        out[(rel, cls, key)] = False
     return out
 
 
-def _ext_cleared(ext: dict, rel: str, content: str) -> bool:
-    """True (and marks it used) when an --exceptions entry covers this exact line of this file."""
+def _ext_cleared(ext: dict, rel: str, name: str, content: str) -> bool:
+    """True (and marks it used) when an --exceptions entry covers this pattern class on this exact line of this file."""
     c = content.strip()
-    for key in ((rel, c), (rel, hashlib.sha256(c.encode("utf-8")).hexdigest())):
+    for key in ((rel, name, c), (rel, name, hashlib.sha256(c.encode("utf-8")).hexdigest())):
         if key in ext:
             ext[key] = True
             return True
@@ -557,7 +589,7 @@ def scan_history(root: pathlib.Path, full: bool, patterns: dict, allowed: set, e
     for (path, mode, oid), commit in readable.items():
         found = set()
         for k, v in enumerate(_views(blobs[oid])):
-            ex = _self_exempt_lines(v) if (path == self_rel and mode != "120000" and k == 0) else None
+            ex = _self_exempt(v) if (path == self_rel and mode != "120000" and k == 0) else None
             found |= {(n, s) for _ln, n, s in _scan_text(path, v, patterns, allowed, ex, ext)}
         for name, snippet in sorted(found):
             hits.append((commit[:9], name, f"{path}: {snippet}"[:100], path))
@@ -601,7 +633,7 @@ def scan_tree(root: pathlib.Path, patterns: dict, allowed: set, ext: dict | None
         scanned += 1
         found = set()
         for k, v in enumerate(_views(data)):
-            ex = _self_exempt_lines(v) if (rel == self_rel and stat.S_ISREG(st.st_mode) and k == 0) else None
+            ex = _self_exempt(v) if (rel == self_rel and stat.S_ISREG(st.st_mode) and k == 0) else None
             found |= set(_scan_text(rel, v, patterns, allowed, ex, ext))
         findings += [(rel, ln, n, s) for ln, n, s in sorted(found)]
     return findings, scanned
@@ -615,33 +647,43 @@ def _withheld(path: str, named: set[str]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="the §4 pre-publish hard gate")
+    ap = argparse.ArgumentParser(description="the §4 pre-publish hard gate", allow_abbrev=False)
     ap.add_argument("--full-history", action="store_true", help="scan every reachable commit (--all)")
     ap.add_argument("--root", help="scan this git repository instead of the one holding the script")
     ap.add_argument("--terms", help="private-terms file (outside the scanned tree); missing/unreadable = exit 2")
     ap.add_argument("--generic", action="store_true", help="add the GENERIC_PATTERNS (MAC, private IP, UUID, ...)")
-    ap.add_argument("--exceptions", help="<relpath><TAB><line|sha256:hex> exceptions; a stale one fails the run")
+    ap.add_argument("--exceptions", help="<relpath><TAB><pattern><TAB><line|sha256:hex> exceptions; a stale one fails the run")
     ap.add_argument("--counts-only", action="store_true", help="print per-pattern/per-file counts, never hit text")
     a = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    # An empty path is never a request for the default: `--terms ""` used to fall back to the tree's own terms file.
+    for flag, val in (("--root", a.root), ("--terms", a.terms), ("--exceptions", a.exceptions)):
+        if val is not None and not val.strip():
+            print(f"publish_scan: {flag} was given an empty path", file=sys.stderr)
+            return 2
 
     script_dir = pathlib.Path(__file__).resolve().parent
-    root = pathlib.Path(a.root).resolve() if a.root else script_dir
+    root = pathlib.Path(a.root).resolve() if a.root is not None else script_dir
     if not root.is_dir():
         print(f"publish_scan: --root {root} is not a directory", file=sys.stderr)
         return 2
-    if a.root and not _git(root, "rev-parse", "--git-dir").strip():
+    if a.root is not None and not _git(root, "rev-parse", "--git-dir").strip():
         print(f"publish_scan: --root {root} is not a git repository (or git failed)", file=sys.stderr)
         return 2
     # The scanner's self-exemption holds only in its own repository: under --root, a file of the same name is a file.
-    self_rel = SELF if root == script_dir else None
+    own_tree = root == script_dir
+    self_rel = SELF if own_tree else None
+    # The built-in EXCEPTIONS and the public identity classes are reviewed facts about THIS repository; a foreign tree
+    # starts with none (review, 2026-11-13: the LICENSE line licensed the same line in any repository).
+    builtin = EXCEPTIONS if own_tree else []
+    id_allowed = ID_ALLOWED_CLASSES if own_tree else frozenset()
     full_history = a.full_history
     if _git(root, "rev-parse", "--show-prefix").strip():
         # ls-files lists only what lies under its cwd: from a subdirectory, the rest of the
         # repository would never be read.
         print("BLOCKED — publish_scan.py must sit at the root of the repository it scans."
-              if not a.root else f"BLOCKED — --root {root} is a subdirectory, not the top of its repository.")
+              if a.root is None else f"BLOCKED — --root {root} is a subdirectory, not the top of its repository.")
         return 1
-    terms_path = pathlib.Path(a.terms) if a.terms else None
+    terms_path = pathlib.Path(a.terms) if a.terms is not None else None
     try:
         extra = _codename_pattern(root, terms_path)
     except Unreadable as e:
@@ -651,9 +693,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"BLOCKED — {e}")
         return 1
     try:
-        ext = _load_exceptions(pathlib.Path(a.exceptions)) if a.exceptions else None
+        ext = _load_exceptions(pathlib.Path(a.exceptions)) if a.exceptions is not None else None
     except BadExceptions as e:
         print(f"publish_scan: {e}", file=sys.stderr)
+        return 2
+    known = set(PATTERNS) | set(GENERIC_PATTERNS) | {"private-codename", "private-codename-cs"}
+    unknown = sorted({c for _r, c, _k in (ext or {}) if c not in known})
+    if unknown:
+        print(f"publish_scan: --exceptions names unknown pattern class(es): {', '.join(unknown)}", file=sys.stderr)
         return 2
     where = str(terms_path) if terms_path is not None else TERMS_FILE
     # FS-4i: a terms file that yields no term (empty, or comments only) is an absent one, not a checked one.
@@ -674,8 +721,8 @@ def main(argv: list[str] | None = None) -> int:
           else f"publish_scan: no {TERMS_FILE} found — generic patterns only")
     if a.generic:
         print(f"publish_scan: --generic: {len(GENERIC_PATTERNS)} shape pattern(s) added")
-    allowed = _allowed()
-    # The scanner is exempt from nothing but the identity examples inside its own tables (cf. _self_exempt_lines);
+    allowed = _allowed(builtin)
+    # The scanner is exempt from nothing but the identity examples inside its own tables (cf. _self_exempt);
     # a private term or a key in it would ship through the one file nobody read (cf. _codename_pattern).
     try:
         findings, scanned = scan_tree(root, active, allowed, ext, self_rel)
@@ -687,9 +734,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(f"publish_scan: {scanned} file(s) in the publish set, "
-          f"{len(active)} pattern(s), {len(EXCEPTIONS)} declared exception(s)"
+          f"{len(active)} pattern(s), {len(builtin)} declared exception(s)"
           + (f", {len(ext)} --exceptions entr(ies)" if ext is not None else ""))
-    for f, p, _line, why in EXCEPTIONS:
+    for f, p, _line, why in builtin:
         print(f"  allowed: {f} [{p}] — {why}")
     # F9: commit AUTHOR/COMMITTER metadata is published too, and no content scan sees it. Same range as the history
     # scan (N-4, 2026-10-28): HEAD by default, --all only with --full-history. With --all, a local restore branch or
@@ -700,7 +747,7 @@ def main(argv: list[str] | None = None) -> int:
     id_hits = [(i, n) for i in idents for n, pat in active.items() if any(True for _ in _matches(n, pat, i))]
     # 2026-10-28 (external review HIGH-1/MED-2): identity hits BLOCK, except the classes declared public here. The
     # author's NAME is the declared copyright holder (see the LICENSE exception); any other identity hit blocks.
-    id_block = [(i, n) for i, n in id_hits if n not in ID_ALLOWED_CLASSES]
+    id_block = [(i, n) for i, n in id_hits if n not in id_allowed]
     # Commit MESSAGES are published too and no tree scan reads them.
     msgs = _git(root, "log", *rng, "--format=%H%x00%B%x1e")
     msg_hits = []
@@ -710,7 +757,7 @@ def main(argv: list[str] | None = None) -> int:
         sha, body = rec.strip("\n").split("\x00", 1)
         for n, pat in active.items():
             m = next(_matches(n, pat, body), None)
-            if m and n not in ID_ALLOWED_CLASSES:
+            if m and n not in id_allowed:
                 msg_hits.append((sha[:7], n, body[max(0, m.start() - 20):m.end() + 20].replace("\n", " ")))
     if idents:
         print(f"  commit identities in history: {len(idents)}")
@@ -754,8 +801,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  … and {len(hist) - 40} more")
     if stale:
         print(f"\nSTALE exception(s): {len(stale)} --exceptions entr(ies) matched nothing:")
-        for rel, key in stale:
-            print(f"  {rel}  (key {hashlib.sha256(key.encode()).hexdigest()[:12]})")
+        for rel, cls, key in stale:
+            shown = _withheld(rel, {rel}) if a.counts_only else rel     # the path the user wrote may itself be private
+            print(f"  {shown}  [{cls}]  (key {hashlib.sha256(key.encode()).hexdigest()[:12]})")
 
     if id_block or msg_hits:
         if not a.counts_only:

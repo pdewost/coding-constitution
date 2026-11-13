@@ -27,7 +27,8 @@ UUID = "-".join(["0f1e2d3c", "4b5a", "6978", "8a9b", "acbdcedfe0f1"])
 TOKEN = "gh" + "p_" + "A1b2C3d4E5f6G7h8I9j0K1l2"          # github-token shape
 HOME = "/" + "Users/" + "someone/x"                        # absolute-home-path shape
 SERIAL = "C02" + "XK1ABJG5H"                               # serial-like shape
-CODENAME = "ZEPHYRQUILL"                                   # a made-up private term
+CODENAME = "ZEPHYRQUILL"
+OWNER = "Dew" + "ost"                                     # owner-name shape                                   # a made-up private term
 
 
 def _git(cwd: pathlib.Path, *args: str) -> None:
@@ -176,7 +177,8 @@ def test_exceptions_by_exact_line_and_by_sha256(tmp_path):
     line_a, line_b = f"token {TOKEN}", f"host = {PRIVATE_V4}"
     root = _repo(tmp_path, {"a.txt": line_a + "\n", "b.txt": line_b + "\n"})
     ex = tmp_path / "exceptions.tsv"
-    ex.write_text(f"# reviewed\na.txt\t{line_a}\nb.txt\tsha256:{hashlib.sha256(line_b.encode()).hexdigest()}\n",
+    ex.write_text(f"# reviewed\na.txt\tgithub-token\t{line_a}\n"
+                  f"b.txt\tipv4-address\tsha256:{hashlib.sha256(line_b.encode()).hexdigest()}\n",
                   encoding="utf-8")
     r = _run("--root", str(root), "--terms", str(_terms(tmp_path)), "--generic", "--exceptions", str(ex))
     assert r.returncode == 0, r.stdout
@@ -186,7 +188,7 @@ def test_exceptions_by_exact_line_and_by_sha256(tmp_path):
 def test_exceptions_stale_entry_fails_the_run(tmp_path):
     root = _repo(tmp_path, {"a.txt": "nothing\n"})
     ex = tmp_path / "exceptions.tsv"
-    ex.write_text("a.txt\tno such line\n", encoding="utf-8")
+    ex.write_text("a.txt\tgithub-token\tno such line\n", encoding="utf-8")
     r = _run("--root", str(root), "--terms", str(_terms(tmp_path)), "--exceptions", str(ex))
     assert r.returncode == 1 and "STALE exception(s): 1" in r.stdout
     assert "no such line" not in r.stdout                  # the key is shown by digest, not by text
@@ -195,7 +197,7 @@ def test_exceptions_stale_entry_fails_the_run(tmp_path):
 def test_exceptions_malformed_or_missing_exits_2(tmp_path):
     root = _repo(tmp_path, {"a.txt": "x\n"})
     bad = tmp_path / "bad.tsv"
-    bad.write_text("a.txt no tab here\n", encoding="utf-8")
+    bad.write_text("a.txt\tonly two fields\n", encoding="utf-8")
     r = _run("--root", str(root), "--terms", str(_terms(tmp_path)), "--exceptions", str(bad))
     assert r.returncode == 2 and "line 1" in r.stderr
     r = _run("--root", str(root), "--terms", str(_terms(tmp_path)), "--exceptions", str(tmp_path / "none.tsv"))
@@ -208,7 +210,7 @@ def test_exceptions_clear_a_history_hit(tmp_path):
     (root / "a.txt").write_text("gone\n", encoding="utf-8")
     _git(root, "commit", "-q", "-am", "scrub")
     ex = tmp_path / "exceptions.tsv"
-    ex.write_text(f"a.txt\t{line}\n", encoding="utf-8")
+    ex.write_text(f"a.txt\tgithub-token\t{line}\n", encoding="utf-8")
     r = _run("--root", str(root), "--terms", str(_terms(tmp_path)), "--exceptions", str(ex))
     assert r.returncode == 0, r.stdout
 
@@ -236,3 +238,101 @@ def test_counts_only_hides_history_text(tmp_path):
     r = _run("--root", str(root), "--terms", str(_terms(tmp_path)), "--counts-only")
     assert r.returncode == 1 and "history pattern github-token: 1" in r.stdout
     assert TOKEN not in r.stdout + r.stderr
+
+
+# --- review round 1 (2026-11-13): one test per finding, each failing on a7a3b09 ------------------------------------
+
+def _own_copy(tmp_path: pathlib.Path, edit=None) -> pathlib.Path:
+    """A repository holding a copy of the scanner (optionally edited), run as its own tree."""
+    root = _repo(tmp_path, {"README.md": "x\n"}, "own")
+    src = SCANNER.read_text(encoding="utf-8")
+    (root / "publish_scan.py").write_text(edit(src) if edit else src, encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "add scanner")
+    return root / "publish_scan.py"
+
+
+@pytest.mark.parametrize("table", ["_MAC_DOC_PREFIX", "_DOC_V4", "_DOC_V6", "_PRIVATE_V4", "_PRIVATE_V6"])
+def test_r1_self_exemption_covers_only_string_literals_of_the_shape_tables(tmp_path, table):
+    # Finding 1: a comment on a shape-table line was exempt, with or without --generic.
+    def edit(src):
+        lines = src.split("\n")
+        k = next(i for i, ln in enumerate(lines) if ln.startswith(table + " ="))
+        lines[k] += "   # " + HOME
+        return "\n".join(lines)
+    scanner = _own_copy(tmp_path, edit)
+    for extra in ([], ["--generic"]):
+        r = _run("--terms", str(_terms(tmp_path)), *extra, scanner=scanner)
+        assert r.returncode == 1 and "[absolute-home-path]" in r.stdout, (extra, r.stdout)
+
+
+def test_r1_self_exemption_covers_no_comment_above_a_shape_table(tmp_path):
+    def edit(src):
+        return src.replace("\nGENERIC_PATTERNS = {", f"\n# {HOME}\nGENERIC_PATTERNS = {{", 1)
+    r = _run("--terms", str(_terms(tmp_path)), scanner=_own_copy(tmp_path, edit))
+    assert r.returncode == 1 and "[absolute-home-path]" in r.stdout
+
+
+def test_r2_an_exception_clears_only_its_own_pattern_class(tmp_path):
+    # Finding 2: one entry cleared every pattern on its line.
+    line = f"token {TOKEN} at {HOME}"
+    root = _repo(tmp_path, {"a.txt": line + "\n"})
+    ex = tmp_path / "exceptions.tsv"
+    ex.write_text(f"a.txt\tgithub-token\t{line}\n", encoding="utf-8")
+    r = _run("--root", str(root), "--terms", str(_terms(tmp_path)), "--exceptions", str(ex))
+    assert r.returncode == 1 and "[absolute-home-path]" in r.stdout and "[github-token]" not in r.stdout
+
+
+def test_r2_an_exception_naming_an_unknown_class_exits_2(tmp_path):
+    root = _repo(tmp_path, {"a.txt": "x\n"})
+    ex = tmp_path / "exceptions.tsv"
+    ex.write_text("a.txt\tno-such-class\tx\n", encoding="utf-8")
+    r = _run("--root", str(root), "--terms", str(_terms(tmp_path)), "--exceptions", str(ex))
+    assert r.returncode == 2 and "unknown pattern class" in r.stderr
+
+
+def test_r3_builtin_exceptions_do_not_apply_to_a_foreign_root(tmp_path):
+    # Finding 3: the built-in LICENSE exception licensed the same line in any repository.
+    root = _repo(tmp_path, {"LICENSE": f"Copyright (c) 2026 Philippe {OWNER}\n"})
+    r = _run("--root", str(root), "--terms", str(_terms(tmp_path)))
+    assert r.returncode == 1 and "LICENSE:1  [owner-name]" in r.stdout
+    assert "0 declared exception(s)" in r.stdout
+
+
+def test_r3_owner_name_identity_is_not_public_in_a_foreign_root(tmp_path):
+    root = tmp_path / "foreign"
+    root.mkdir()
+    _git(root, "init", "-q", "-b", "main")
+    (root / "a.txt").write_text("x\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    env = {**os.environ, "GIT_AUTHOR_NAME": f"A {OWNER}", "GIT_AUTHOR_EMAIL": "a@example.invalid",
+           "GIT_COMMITTER_NAME": f"A {OWNER}", "GIT_COMMITTER_EMAIL": "a@example.invalid"}
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "x"], cwd=root, check=True, env=env)
+    r = _run("--root", str(root), "--terms", str(_terms(tmp_path)))
+    assert r.returncode == 1 and "BLOCKING identity [owner-name]" in r.stdout
+
+
+@pytest.mark.parametrize("flag", ["--terms", "--exceptions", "--root"])
+def test_r4_an_empty_path_argument_exits_2(tmp_path, flag):
+    # Finding 4: --terms "" fell back to the tree's own terms file, --exceptions "" was ignored.
+    root = _repo(tmp_path, {"a.txt": "x\n"})
+    args = {"--terms": ["--root", str(root), "--terms", ""],
+            "--exceptions": ["--root", str(root), "--terms", str(_terms(tmp_path)), "--exceptions", ""],
+            "--root": ["--root", "", "--terms", str(_terms(tmp_path))]}[flag]
+    r = _run(*args)
+    assert r.returncode == 2 and "empty" in r.stderr, r.stdout + r.stderr
+
+
+def test_r5_counts_only_withholds_a_stale_exception_path(tmp_path):
+    root = _repo(tmp_path, {"a.txt": "x\n"})
+    ex = tmp_path / "exceptions.tsv"
+    ex.write_text(f"{CODENAME}_dir/plan.md\tgithub-token\tnothing\n", encoding="utf-8")
+    r = _run("--root", str(root), "--terms", str(_terms(tmp_path)), "--exceptions", str(ex), "--counts-only")
+    assert r.returncode == 1 and "STALE exception(s): 1" in r.stdout
+    assert CODENAME not in r.stdout + r.stderr
+
+
+def test_r6_abbreviated_options_are_refused(tmp_path):
+    root = _repo(tmp_path, {"a.txt": f"host {PRIVATE_V4}\n"})
+    r = _run("--root", str(root), "--terms", str(_terms(tmp_path)), "--gen")
+    assert r.returncode == 2 and "unrecognized arguments: --gen" in r.stderr
