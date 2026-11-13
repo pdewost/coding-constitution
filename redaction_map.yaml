@@ -373,6 +373,7 @@ public_only:
   - ANTIGRAVITY.md       # superseded-2025 stub, kept for lineage
   - redaction_map.yaml   # this file
   - publish_scan.py      # the §4 gate
+  - tests/              # tests of publish_scan.py's options (G1, 2026-11-13)
   - reviews/             # scrubbed review records
   - _skills/adversarial_review/   # frozen at its published v1.1.0 since 2026-10-08: the private skill documents the review fleet
 

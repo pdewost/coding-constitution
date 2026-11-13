@@ -19,11 +19,18 @@ reading of a file that is valid UTF-8 (a mojibake term); a filename that is not 
 cannot hold one; a hand-built history can); an identity-class string placed on the same source line as, but outside, the closing
 brace of its own PATTERNS / EXCEPTIONS table. Each was found by an external look and left open on the founder's word (option C).
 
+OPTIONS (G1, ported 2026-11-13 from the origin workspace's scanner; machinery only, no pattern of that workspace came
+with it): `--generic` adds the shape patterns of GENERIC_PATTERNS (MAC, private IP, UUID, …); `--root` scans another
+repository; `--terms` reads the private terms from a file outside the scanned tree; `--exceptions` reads reviewed
+exceptions from a file, and an entry that clears nothing fails the run; `--counts-only` prints counts, never hit text.
+
 Exit 0 = clean (or only declared exceptions). Exit 1 = blocked — including whenever some
 part of the publish set could not be read: "skipped" and "clean" must never look the same.
+Exit 2 = the run could not start: a `--root` that is not a directory or not a git repository, a `--terms` or
+`--exceptions` file that is missing, unreadable or malformed, or a bad command line.
 """
 from __future__ import annotations
-import ast, bisect, os, re, stat, subprocess, sys, pathlib
+import argparse, ast, bisect, collections, hashlib, ipaddress, os, re, stat, subprocess, sys, pathlib
 
 PATTERNS = {
     # --- identity / location ---
@@ -67,6 +74,62 @@ PATTERNS = {
     "generic-secret-assign": r"(?i)(?:api[_\-]?key|secret|passwd|password|token|bearer)"
                              r"\s*[:=]\s*[\"\']?[A-Za-z0-9/+_\-]{16,}",
 }
+
+# --- GENERIC (shape) patterns, G1 2026-11-06. Used ONLY with `--generic`. Deliberately a SEPARATE dict: PATTERNS is
+# imported by other scans and must not change under them.
+# Each entry is a candidate shape; _GENERIC_VALIDATE (below) then applies the exemptions for documentation ranges.
+GENERIC_PATTERNS = {
+    "mac-address":     r"(?<![0-9A-Fa-f:\-])(?:[0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:\-])",
+    "ipv4-address":    r"(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9]|\.[0-9])",
+    "ipv6-address":    r"(?<![0-9A-Za-z:])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![0-9A-Za-z:])",
+    "uuid":            r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}(?![0-9A-Fa-f])",
+    "homekit-setup-code": r"(?<![0-9\-])(?:[0-9]{3}-[0-9]{2}-[0-9]{3}|[0-9]{4}-[0-9]{4})(?![0-9\-])",
+    # Serial-like: a keyword-anchored value, or a bare 10-12 char upper-case/digit token with letters AND >=4 digits
+    # (so Core Data column names such as ZACCESSORY1 are not caught by their shape).
+    "serial-like":     r"(?i:\b(?:serial(?:[ _\-]?(?:no|number|num))?|s/n)\b\s*[:=#]?\s*[\"\']?(?=[A-Z0-9\-]*[0-9])[A-Z0-9][A-Z0-9\-]{6,})"
+                       r"|(?<![A-Za-z0-9_])(?=[A-Z0-9]*[A-Z])(?=(?:[A-Z]*[0-9]){4})[A-Z0-9]{10,12}(?![A-Za-z0-9_])",
+}
+# Documentation ranges never count (RFC 7042, RFC 5737, RFC 3849); an IP address counts only when it is private.
+_MAC_DOC_PREFIX = "00:00:5e:00:53"
+_DOC_V4 = [ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24")]
+_DOC_V6 = ipaddress.ip_network("2001:db8::/32")
+_PRIVATE_V4 = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16")]
+_PRIVATE_V6 = [ipaddress.ip_network(n) for n in ("fc00::/7", "fe80::/10")]
+
+
+def _v_mac(t: str) -> bool:
+    return t.lower().replace("-", ":")[:14] != _MAC_DOC_PREFIX
+
+
+def _v_ipv4(t: str) -> bool:
+    try:
+        a = ipaddress.IPv4Address(t)
+    except ValueError:
+        return False
+    if any(a in n for n in _DOC_V4):
+        return False
+    return any(a in n for n in _PRIVATE_V4)
+
+
+def _v_ipv6(t: str) -> bool:
+    try:
+        a = ipaddress.IPv6Address(t)
+    except ValueError:
+        return False
+    if a in _DOC_V6:
+        return False
+    return any(a in n for n in _PRIVATE_V6)
+
+
+_GENERIC_VALIDATE = {"mac-address": _v_mac, "ipv4-address": _v_ipv4, "ipv6-address": _v_ipv6}
+
+
+def _matches(name: str, pat: str, text: str):
+    """Yield the match objects of one pattern, applying the generic exemptions (documentation ranges)."""
+    v = _GENERIC_VALIDATE.get(name)
+    for m in re.finditer(pat, text):
+        if v is None or v(m.group(0)):
+            yield m
 
 # (path, pattern-name, exact-matched-line, why) — reviewed, intentional, not a leak.
 #
@@ -128,7 +191,11 @@ SELF = "publish_scan.py"
 # a key appended to it passed. Now it is exempt from the IDENTITY-class patterns only, and only on lines that belong to its own
 # PATTERNS / EXCEPTIONS tables (see _self_exempt_lines); credentials, private terms and identity strings anywhere else in it block.
 IDENTITY_CLASS = frozenset({"absolute-home-path", "workspace-path", "owner-name", "contact-handle", "phone", "local-database"})
-SELF_TABLES = ("PATTERNS", "EXCEPTIONS")
+# G1 (2026-11-13): under --generic the scanner's own tables of shapes and ranges are examples of what they hunt, too
+# (its private-range table holds private addresses). The same rule: those classes, on those tables' lines, and nowhere else.
+SELF_EXEMPT_CLASS = IDENTITY_CLASS | frozenset(GENERIC_PATTERNS)
+SELF_TABLES = ("PATTERNS", "EXCEPTIONS", "GENERIC_PATTERNS", "_MAC_DOC_PREFIX", "_DOC_V4", "_DOC_V6",
+               "_PRIVATE_V4", "_PRIVATE_V6")
 
 # Git objects are read as they are, never through `refs/replace/`: a replacement can show the scanner a clean blob where the
 # commit being published holds a key (F3). Both the flag and the environment variable, so a config cannot undo it.
@@ -186,7 +253,7 @@ def _self_exempt_lines(text: str) -> set[int]:
 
 
 def _scan_text(rel: str, text: str, patterns: dict, allowed: set,
-               self_lines: set | None = None) -> list[tuple[int, str, str]]:
+               self_lines: set | None = None, ext: dict | None = None) -> list[tuple[int, str, str]]:
     """(line, pattern, snippet) for every undeclared hit in `text`, which belongs to `rel`.
 
     A LINE is what lies between two '\\n' — git's notion, and the only one used here, for
@@ -202,28 +269,32 @@ def _scan_text(rel: str, text: str, patterns: dict, allowed: set,
         starts.append(starts[-1] + len(ln) + 1)
     out = []
     for name, pat in patterns.items():
-        for m in re.finditer(pat, text):
+        for m in _matches(name, pat, text):
             i = bisect.bisect_right(starts, m.start()) - 1
             j = bisect.bisect_right(starts, max(m.end() - 1, m.start())) - 1
             content = "\n".join(lines[i:j + 1]).strip()
             if (rel, name, content) in allowed:
                 continue
-            if self_lines and name in IDENTITY_CLASS and all(n in self_lines for n in range(i + 1, j + 2)):
+            if self_lines and name in SELF_EXEMPT_CLASS and all(n in self_lines for n in range(i + 1, j + 2)):
                 continue                           # the scanner's own tables name what they hunt
+            if ext is not None and _ext_cleared(ext, rel, content):
+                continue
             out.append((i + 1, name, content[:90]))
     return out
 
 
-def _scan_name(rel: str, patterns: dict, allowed: set) -> list[str]:
+def _scan_name(rel: str, patterns: dict, allowed: set, ext: dict | None = None) -> list[str]:
     """Pattern names that hit the PATH itself (F4: the path is content too)."""
-    return [n for n, pat in patterns.items() if re.search(pat, rel) and (rel, n, rel) not in allowed]
+    return [n for n, pat in patterns.items()
+            if any(True for _ in _matches(n, pat, rel)) and (rel, n, rel) not in allowed
+            and not (ext is not None and _ext_cleared(ext, rel, rel))]
 
 
 
 TERMS_FILE = ".publish_scan_terms"
 
 
-def _codename_pattern(root: pathlib.Path):
+def _codename_pattern(root: pathlib.Path, terms_path: pathlib.Path | None = None):
     """Build the private-codename patterns from an UNTRACKED local terms file.
 
     Why not a literal list in this file: this scanner is published, and it skips itself when
@@ -241,21 +312,27 @@ def _codename_pattern(root: pathlib.Path):
     Absent file = generic patterns only, and main() then BLOCKS unless PUBLISH_SCAN_NO_PRIVATE_TERMS=1
     says there are none (an adopter: your codenames are not ours). A mislaid file must not pass for an
     empty one (external review, 2026-10-28, N-3). Keep the file untracked; .gitignore already lists it.
+
+    `terms_path` (G1, `--terms`): read the terms from this file instead, kept outside the scanned tree. A named file that is
+    missing is never "absent": it raises, like an unreadable one.
     """
-    f = root / TERMS_FILE
+    f = terms_path if terms_path is not None else root / TERMS_FILE
+    label = str(terms_path) if terms_path is not None else TERMS_FILE
     try:
         os.lstat(f)
     except FileNotFoundError:
+        if terms_path is not None:
+            raise Unreadable(f"--terms file {label} does not exist: the private terms cannot be applied")
         return {}                                  # genuinely absent: generic patterns only, as documented
     except OSError as e:
-        raise Unreadable(f"{TERMS_FILE} cannot be examined ({e.strerror}): the private terms cannot be applied")
+        raise Unreadable(f"{label} cannot be examined ({e.strerror}): the private terms cannot be applied")
     try:
         if not f.is_file():
-            raise Unreadable(f"{TERMS_FILE} exists but is not a regular file (a directory, or a dangling link?): "
+            raise Unreadable(f"{label} exists but is not a regular file (a directory, or a dangling link?): "
                              "the private terms cannot be applied")
         text = f.read_text(encoding="utf-8-sig")       # an editor's BOM must not become part of the first term (round 3, L4)
     except (OSError, UnicodeDecodeError) as e:
-        raise Unreadable(f"{TERMS_FILE} cannot be read as UTF-8 text ({type(e).__name__}): the private terms "
+        raise Unreadable(f"{label} cannot be read as UTF-8 text ({type(e).__name__}): the private terms "
                          "cannot be applied")
     ci, cs = [], []
     for line in text.splitlines():
@@ -274,6 +351,44 @@ def _codename_pattern(root: pathlib.Path):
 def _allowed() -> set:
     """The declared-exception key set, shared by the tree scan and the history scan."""
     return {(f, p, line.strip()) for f, p, line, _ in EXCEPTIONS}
+
+
+class BadExceptions(ValueError):
+    """The --exceptions file cannot be read or does not parse: the run cannot start (exit 2)."""
+
+
+def _load_exceptions(path: pathlib.Path) -> dict:
+    """Read an exceptions file: one `<path relative to --root><TAB><exact stripped line | sha256:<hex>>` per line.
+
+    Lines starting with '#' and blank lines are ignored. Returns {(rel, key): False}; the value flips to True when
+    the exception clears a hit (an exception that never does is STALE and fails the run). Raises BadExceptions if the
+    file is unreadable or a line does not parse. Unlike EXCEPTIONS, an entry here covers every pattern on that line."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        raise BadExceptions(f"cannot read --exceptions file {path}: {type(e).__name__}")
+    out: dict = {}
+    for n, line in enumerate(raw.splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if "\t" not in line:
+            raise BadExceptions(f"--exceptions line {n}: expected <path><TAB><line text or sha256:hex>")
+        rel, key = line.split("\t", 1)
+        key = key.strip()
+        if key.startswith("sha256:"):
+            key = key[7:].lower()
+        out[(rel.strip(), key)] = False
+    return out
+
+
+def _ext_cleared(ext: dict, rel: str, content: str) -> bool:
+    """True (and marks it used) when an --exceptions entry covers this exact line of this file."""
+    c = content.strip()
+    for key in ((rel, c), (rel, hashlib.sha256(c.encode("utf-8")).hexdigest())):
+        if key in ext:
+            ext[key] = True
+            return True
+    return False
 
 
 def _git(root: pathlib.Path, *args: str) -> str:
@@ -392,8 +507,8 @@ def _read_blobs(root: pathlib.Path, oids: list[str]) -> dict[str, bytes]:
     return blobs
 
 
-def scan_history(root: pathlib.Path, full: bool, patterns: dict,
-                 allowed: set) -> list[tuple[str, str, str]]:
+def scan_history(root: pathlib.Path, full: bool, patterns: dict, allowed: set, ext: dict | None = None,
+                 self_rel: str | None = SELF) -> list[tuple[str, str, str, str]]:
     """Scan commit CONTENT and commit PATHS, not just the working tree.
 
     A push publishes commits, not a snapshot. A secret added in one commit and edited out
@@ -405,6 +520,9 @@ def scan_history(root: pathlib.Path, full: bool, patterns: dict,
     reachable commit, which is what you want before a repository's first publish, or when
     auditing what is already out there. `own` = the patterns the scanner's own file is
     held to (the local private terms); `patterns` = everything, for every other path.
+
+    Each hit is (commit, pattern, snippet, path). `self_rel` is the scanner's own path in the scanned repository, or
+    None when it scans another one (`--root`): a file there that shares the scanner's name earns no exemption.
     """
     _require_no_grafts(root)
     if _is_shallow(root):                          # the commits below the boundary are not there to read (round 2, F4)
@@ -422,39 +540,39 @@ def scan_history(root: pathlib.Path, full: bool, patterns: dict,
     else:
         rng, label = ["HEAD"], "every commit reachable from HEAD (what a push publishes)"
     entries = _history_entries(root, rng)
-    hits: list[tuple[str, str, str]] = []
+    hits: list[tuple[str, str, str, str]] = []
     seen_names: set[str] = set()
     for (path, _mode, _oid), commit in entries.items():
         if path not in seen_names:
             seen_names.add(path)
-            for name in _scan_name(path, patterns, allowed):
-                hits.append((commit[:9], name, f"in the FILENAME: {path}"[:100]))
+            for name in _scan_name(path, patterns, allowed, ext):
+                hits.append((commit[:9], name, f"in the FILENAME: {path}"[:100], path))
     # 100644/100755 = file, 120000 = symlink (the blob IS the target path, which is what a
     # symlink publishes), 160000 = submodule (a foreign commit id: nothing here to read).
     readable = {k: c for k, c in entries.items() if k[1] in ("100644", "100755", "120000")}
     for (path, mode, oid), commit in entries.items():
         if (path, mode, oid) not in readable and mode not in ("160000", "040000"):
-            hits.append((commit[:9], "UNREADABLE", f"{path}: tree entry mode {mode}"[:100]))
+            hits.append((commit[:9], "UNREADABLE", f"{path}: tree entry mode {mode}"[:100], path))
     blobs = _read_blobs(root, sorted({k[2] for k in readable}))
     for (path, mode, oid), commit in readable.items():
         found = set()
         for k, v in enumerate(_views(blobs[oid])):
-            ex = _self_exempt_lines(v) if (path == SELF and mode != "120000" and k == 0) else None
-            found |= {(n, s) for _ln, n, s in _scan_text(path, v, patterns, allowed, ex)}
+            ex = _self_exempt_lines(v) if (path == self_rel and mode != "120000" and k == 0) else None
+            found |= {(n, s) for _ln, n, s in _scan_text(path, v, patterns, allowed, ex, ext)}
         for name, snippet in sorted(found):
-            hits.append((commit[:9], name, f"{path}: {snippet}"[:100]))
+            hits.append((commit[:9], name, f"{path}: {snippet}"[:100], path))
     print(f"  history range scanned: {label}, {len(entries)} tree entr(ies)")
     return hits
 
 
-def scan_tree(root: pathlib.Path, patterns: dict,
-              allowed: set) -> tuple[list[tuple[str, int, str, str]], int]:
+def scan_tree(root: pathlib.Path, patterns: dict, allowed: set, ext: dict | None = None,
+              self_rel: str | None = SELF) -> tuple[list[tuple[str, int, str, str]], int]:
     """The working tree as git would publish it: every listed path is read, or the gate fails."""
     findings, scanned = [], 0
     gitlinks = _gitlinks(root)
     for rel in publish_set(root):
         # The NAME first, before any exemption or read: it is published whatever the content.
-        for name in _scan_name(rel, patterns, allowed):
+        for name in _scan_name(rel, patterns, allowed, ext):
             findings.append((rel, 0, name, f"in the FILENAME: {rel}"))
         path = root / rel
         try:
@@ -483,44 +601,84 @@ def scan_tree(root: pathlib.Path, patterns: dict,
         scanned += 1
         found = set()
         for k, v in enumerate(_views(data)):
-            ex = _self_exempt_lines(v) if (rel == SELF and stat.S_ISREG(st.st_mode) and k == 0) else None
-            found |= set(_scan_text(rel, v, patterns, allowed, ex))
+            ex = _self_exempt_lines(v) if (rel == self_rel and stat.S_ISREG(st.st_mode) and k == 0) else None
+            found |= set(_scan_text(rel, v, patterns, allowed, ex, ext))
         findings += [(rel, ln, n, s) for ln, n, s in sorted(found)]
     return findings, scanned
 
 
-def main() -> int:
-    root = pathlib.Path(__file__).resolve().parent
-    full_history = "--full-history" in sys.argv
+def _withheld(path: str, named: set[str]) -> str:
+    """Under --counts-only a path is printed, unless the path itself carries a hit: then only its digest is."""
+    if path in named:
+        return f"<name withheld, sha256 {hashlib.sha256(path.encode('utf-8', 'surrogateescape')).hexdigest()[:12]}>"
+    return path
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="the §4 pre-publish hard gate")
+    ap.add_argument("--full-history", action="store_true", help="scan every reachable commit (--all)")
+    ap.add_argument("--root", help="scan this git repository instead of the one holding the script")
+    ap.add_argument("--terms", help="private-terms file (outside the scanned tree); missing/unreadable = exit 2")
+    ap.add_argument("--generic", action="store_true", help="add the GENERIC_PATTERNS (MAC, private IP, UUID, ...)")
+    ap.add_argument("--exceptions", help="<relpath><TAB><line|sha256:hex> exceptions; a stale one fails the run")
+    ap.add_argument("--counts-only", action="store_true", help="print per-pattern/per-file counts, never hit text")
+    a = ap.parse_args(sys.argv[1:] if argv is None else argv)
+
+    script_dir = pathlib.Path(__file__).resolve().parent
+    root = pathlib.Path(a.root).resolve() if a.root else script_dir
+    if not root.is_dir():
+        print(f"publish_scan: --root {root} is not a directory", file=sys.stderr)
+        return 2
+    if a.root and not _git(root, "rev-parse", "--git-dir").strip():
+        print(f"publish_scan: --root {root} is not a git repository (or git failed)", file=sys.stderr)
+        return 2
+    # The scanner's self-exemption holds only in its own repository: under --root, a file of the same name is a file.
+    self_rel = SELF if root == script_dir else None
+    full_history = a.full_history
     if _git(root, "rev-parse", "--show-prefix").strip():
         # ls-files lists only what lies under its cwd: from a subdirectory, the rest of the
         # repository would never be read.
-        print("BLOCKED — publish_scan.py must sit at the root of the repository it scans.")
+        print("BLOCKED — publish_scan.py must sit at the root of the repository it scans."
+              if not a.root else f"BLOCKED — --root {root} is a subdirectory, not the top of its repository.")
         return 1
+    terms_path = pathlib.Path(a.terms) if a.terms else None
     try:
-        extra = _codename_pattern(root)
+        extra = _codename_pattern(root, terms_path)
     except Unreadable as e:
+        if terms_path is not None:
+            print(f"publish_scan: {e}", file=sys.stderr)
+            return 2
         print(f"BLOCKED — {e}")
         return 1
+    try:
+        ext = _load_exceptions(pathlib.Path(a.exceptions)) if a.exceptions else None
+    except BadExceptions as e:
+        print(f"publish_scan: {e}", file=sys.stderr)
+        return 2
+    where = str(terms_path) if terms_path is not None else TERMS_FILE
     # FS-4i: a terms file that yields no term (empty, or comments only) is an absent one, not a checked one.
     if not extra and os.environ.get("PUBLISH_SCAN_NO_PRIVATE_TERMS") != "1":
-        what = (f"{TERMS_FILE} holds no term (empty, or comments only)" if os.path.lexists(root / TERMS_FILE)
-                else f"no {TERMS_FILE}")
+        what = (f"{where} holds no term (empty, or comments only)"
+                if terms_path is not None or os.path.lexists(root / TERMS_FILE) else f"no {TERMS_FILE}")
         print(f"BLOCKED — {what}: the private terms (codenames, contact handle) are not applied, so CLEAN would"
               " prove nothing about them. Restore the file, or set PUBLISH_SCAN_NO_PRIVATE_TERMS=1 if you have none.")
         return 1
     # FS-4e/4i: when no private term was applied, the closing line must not read like a full scan's.
     terms_checked = bool(extra)
-    PATTERNS.update(extra)
+    # A fresh table per run: the module-level PATTERNS is never mutated (other scans import it).
+    active = {**PATTERNS, **extra, **(GENERIC_PATTERNS if a.generic else {})}
     print(f"publish_scan: {len(extra)} project-codename pattern(s) loaded from "
-          f"{TERMS_FILE}" if extra else
-          f"publish_scan: {TERMS_FILE} holds no term (empty, or comments only) — generic patterns only"
-          if os.path.lexists(root / TERMS_FILE) else f"publish_scan: no {TERMS_FILE} found — generic patterns only")
+          f"{where}" if extra else
+          f"publish_scan: {where} holds no term (empty, or comments only) — generic patterns only"
+          if terms_path is not None or os.path.lexists(root / TERMS_FILE)
+          else f"publish_scan: no {TERMS_FILE} found — generic patterns only")
+    if a.generic:
+        print(f"publish_scan: --generic: {len(GENERIC_PATTERNS)} shape pattern(s) added")
     allowed = _allowed()
     # The scanner is exempt from nothing but the identity examples inside its own tables (cf. _self_exempt_lines);
     # a private term or a key in it would ship through the one file nobody read (cf. _codename_pattern).
     try:
-        findings, scanned = scan_tree(root, PATTERNS, allowed)
+        findings, scanned = scan_tree(root, active, allowed, ext, self_rel)
     except subprocess.CalledProcessError as e:
         print(f"\nBLOCKED — the publish set cannot be listed (git exit {e.returncode}).")
         return 1
@@ -529,7 +687,8 @@ def main() -> int:
         return 1
 
     print(f"publish_scan: {scanned} file(s) in the publish set, "
-          f"{len(PATTERNS)} pattern(s), {len(EXCEPTIONS)} declared exception(s)")
+          f"{len(active)} pattern(s), {len(EXCEPTIONS)} declared exception(s)"
+          + (f", {len(ext)} --exceptions entr(ies)" if ext is not None else ""))
     for f, p, _line, why in EXCEPTIONS:
         print(f"  allowed: {f} [{p}] — {why}")
     # F9: commit AUTHOR/COMMITTER metadata is published too, and no content scan sees it. Same range as the history
@@ -538,7 +697,7 @@ def main() -> int:
     rng = ["--all"] if full_history else ["HEAD"]
     ident = _git(root, "log", *rng, "--pretty=format:%an <%ae>%n%cn <%ce>")
     idents = sorted({l.strip() for l in ident.splitlines() if l.strip()})
-    id_hits = [(i, n) for i in idents for n, pat in PATTERNS.items() if re.search(pat, i)]
+    id_hits = [(i, n) for i in idents for n, pat in active.items() if any(True for _ in _matches(n, pat, i))]
     # 2026-10-28 (external review HIGH-1/MED-2): identity hits BLOCK, except the classes declared public here. The
     # author's NAME is the declared copyright holder (see the LICENSE exception); any other identity hit blocks.
     id_block = [(i, n) for i, n in id_hits if n not in ID_ALLOWED_CLASSES]
@@ -549,50 +708,81 @@ def main() -> int:
         if "\x00" not in rec:
             continue
         sha, body = rec.strip("\n").split("\x00", 1)
-        for n, pat in PATTERNS.items():
-            m = re.search(pat, body)
+        for n, pat in active.items():
+            m = next(_matches(n, pat, body), None)
             if m and n not in ID_ALLOWED_CLASSES:
                 msg_hits.append((sha[:7], n, body[max(0, m.start() - 20):m.end() + 20].replace("\n", " ")))
     if idents:
         print(f"  commit identities in history: {len(idents)}")
-        for i, n in id_hits:
-            print(f"    [{n}] {i}   (metadata — a content scan never sees this)")
+        if a.counts_only:
+            if id_hits:
+                print(f"    identity hits: {len(id_hits)}")
+        else:
+            for i, n in id_hits:
+                print(f"    [{n}] {i}   (metadata — a content scan never sees this)")
 
     try:
-        hist = scan_history(root, full_history, PATTERNS, allowed)
+        hist = scan_history(root, full_history, active, allowed, ext, self_rel)
     except (Unreadable, ValueError) as e:      # ValueError: a git reply that does not parse
         print(f"\nBLOCKED — history cannot be read, so it cannot be shown clean: {e}")
         return 1
+    stale = [k for k, used in (ext or {}).items() if not used]
     # History hits in ALREADY-PUSHED commits cannot be fixed by editing a file; they are
     # reported separately so they are never mistaken for something this run can clear.
-    if hist:
+    if a.counts_only:
+        named = {r for r, ln, _n, _s in findings if ln == 0} | {p for _c, _n, s, p in hist if s.startswith("in the FILENAME")}
+        print("\nCOUNTS (no matched text is printed):")
+        print(f"  tree hits: {len(findings)}")
+        for n, c in sorted(collections.Counter(n for _r, _l, n, _s in findings).items()):
+            print(f"    pattern {n}: {c}")
+        for r, c in sorted(collections.Counter(_withheld(r, named) for r, _l, _n, _s in findings).items()):
+            print(f"    file {r}: {c}")
+        print(f"  history hits: {len(hist)}")
+        for n, c in sorted(collections.Counter(n for _c, n, _s, _p in hist).items()):
+            print(f"    history pattern {n}: {c}")
+        for f, c in sorted(collections.Counter(_withheld(p, named) for _c, _n, _s, p in hist).items()):
+            print(f"    history file {f}: {c}")
+        print(f"  blocking identity hits: {len(id_block)}")
+        print(f"  blocking message hits: {len(msg_hits)}")
+        for n, c in sorted(collections.Counter(n for _s, n, _x in msg_hits).items()):
+            print(f"    message pattern {n}: {c}")
+    elif hist:
         print(f"\nHISTORY — {len(hist)} hit(s) in commit content:")
-        for commit, name, snippet in hist[:40]:
+        for commit, name, snippet, _path in hist[:40]:
             print(f"  {commit}  [{name}]  {snippet}")
         if len(hist) > 40:
             print(f"  … and {len(hist) - 40} more")
+    if stale:
+        print(f"\nSTALE exception(s): {len(stale)} --exceptions entr(ies) matched nothing:")
+        for rel, key in stale:
+            print(f"  {rel}  (key {hashlib.sha256(key.encode()).hexdigest()[:12]})")
 
     if id_block or msg_hits:
-        for i, n in id_block:
-            print(f"  BLOCKING identity [{n}] {i}")
-        for sha, n, snip in msg_hits:
-            print(f"  BLOCKING message {sha} [{n}] {snip}")
+        if not a.counts_only:
+            for i, n in id_block:
+                print(f"  BLOCKING identity [{n}] {i}")
+            for sha, n, snip in msg_hits:
+                print(f"  BLOCKING message {sha} [{n}] {snip}")
         print("\nBLOCKED — commit identities or messages carry undeclared hits. Re-author or reword the commits"
               " (a new candidate), or declare the class in ID_ALLOWED_CLASSES with a reason. Do not push.")
         return 1
-    if not findings and not hist:
+    if not findings and not hist and not stale:
         print("\nCLEAN — §4 gate passed. Safe to push." if terms_checked else
               "\nCLEAN (generic patterns only; private terms not checked)")
         return 0
     if not findings:
-        print("\nBLOCKED on history. Commits carry hits the working tree does not.")
-        print("Editing a file cannot fix this: rewrite the history or accept and DECLARE"
-              " the exposure in redaction_map.yaml.")
+        if hist:
+            print("\nBLOCKED on history. Commits carry hits the working tree does not.")
+            print("Editing a file cannot fix this: rewrite the history or accept and DECLARE"
+                  " the exposure in redaction_map.yaml.")
+        if stale:
+            print("\nBLOCKED — stale exception(s): remove them from the --exceptions file.")
         return 1
     print(f"\nBLOCKED — {len(findings)} undeclared hit(s):")
-    for rel, line, name, snippet in findings:
-        print(f"  {rel}:{line}  [{name}]  {snippet}")
-    print("\nFix the file, or add a reviewed entry to EXCEPTIONS with a reason. Do not push.")
+    if not a.counts_only:
+        for rel, line, name, snippet in findings:
+            print(f"  {rel}:{line}  [{name}]  {snippet}")
+        print("\nFix the file, or add a reviewed entry to EXCEPTIONS with a reason. Do not push.")
     return 1
 
 if __name__ == "__main__":
