@@ -435,6 +435,67 @@ def _bash_write_targets(cmd: str) -> list:
     return targets
 
 
+def _cd_next(base, words, op_before, op_after, in_sub):
+    """The directory later relative write targets land in, after a `cd` segment (founder 2026-11-25: "I don't want to see a
+    "no pytest -q" BLOCK anymore"; `cd <scratchpad> && sed -i ... x.py` was joined to the event's cwd, a repo, and blocked every
+    Stop for a file that never existed there). Only a `cd` whose failure would stop the later writes moves it: a plain `cd X`,
+    reached by `&&`, `;` or first, followed by `&&` or the end of the command (s510 H1: after `;` or `||` a failed cd still runs the
+    write in the old directory), not in a subshell, one operand that resolves (no `$`, backtick, `-`, unresolved `~`). Anything
+    else returns None: later relative targets keep the event's cwd, the join the live hook used before, so nothing that blocked
+    stops blocking by guesswork. That fallback is the OLD behaviour, not a safe one: when the event's cwd is not the directory the
+    shell really writes in, a dir change the rule cannot follow places the write in the wrong directory, exactly as before this
+    rule (s510 r4 F1: `cd /repo && (cd /scr) && sed ... x.py`, a cd inside `if`, or `cd -`). A relative `cd` joins the current base
+    (or stays relative, for `_qualify` to join to the event's cwd). Not followed: subshell, loop and `if` bodies (s510 M1, L1)."""
+    import os
+    ops = [a for a in words[1:] if not a.startswith("-")]
+    sure = op_before in (None, "&&", ";") and op_after in ("&&", None) and not in_sub and len(ops) == 1
+    d = _tgt(ops[0]) if sure else ""
+    if not sure or not d or d.startswith(_UNRESOLVED) or set(d) & set("$`*?[{"):   # s510 r3 F3: a glob resolves only in the shell
+        return None
+    return d if os.path.isabs(d) else (os.path.join(base, d) if base else d)
+
+
+_CWD_CHANGERS = {"cd", "pushd", "popd", "builtin", "command", "eval", "source", ".", "exec", "time", "sudo", "!", "{", "}",
+                 "nohup", "env", "xargs", "chdir"}
+
+
+_FUNC_DEF = re.compile(r"\(\s*\)\s*\{|(?:^|[\s;&|(])function\s+[A-Za-z_]")
+
+
+def _seg_bases(segs, cmd: str = "") -> list:
+    """For `_vr.segments_full(cmd)` segments: the cd base in force for each segment (None = the event's cwd). Only a pure `&&` chain
+    carries a base: a segment reached by anything else (`;`, a newline, `||`, `|`, `&`) starts with none (s510 r3 F1: in
+    `cd X && A ; B` a failed cd skips A and B runs in the old directory). Any directory change the rule cannot follow (s510 H2:
+    `pushd`, `builtin cd`, `{ cd x; }`, `! cd`, `time cd`, `exec cd`, `eval`, `source`, a `cd` that is not the first word) drops the
+    base for the rest of the command. A command that defines a function gets no base at all (s510 r3 F4: the function may cd)."""
+    if cmd and _FUNC_DEF.search(cmd):
+        return [None] * len(segs)
+    out, base, depth, prev = [], None, 0, None
+    for k, (words, op, _raw, scope) in enumerate(segs):
+        depth = max(0, depth + scope.count("(") - scope.count(")"))
+        if k and prev != "&&":
+            base = None
+        out.append(base)
+        names = [re.sub(r"\\(.)", r"\1", _unquote(w)).replace("'", "").replace('"', "").split("/")[-1] for w in words]
+        if words and set(words[0]) & set("$`"):
+            base = None                           # s510 r2 M1: a computed command word (`$X /repo`) may be a cd
+        elif names and names[0] == "cd" and not (set(names[1:]) & {"cd", "pushd", "popd"}) and not set(words[0]) & set("\\/"):
+            # s510 r3 F2: a path-qualified `cd` (`/usr/bin/cd`) is an external program and falls to the reset below
+            base = _cd_next(base, words, prev, op, depth > 0)
+        elif set(names) & {"cd", "pushd", "popd"} or (names and names[0] in _CWD_CHANGERS):   # s510 r2 H1: `\cd`, `c\d` too
+            base = None
+        prev = op
+    return out
+
+
+def _rebase(targets, base) -> list:
+    """Join relative, non-empty, resolved targets to a cd base; absolute ones and `''` (BSD `sed -i ''`) are left as they are."""
+    import os
+    if not base:
+        return targets
+    return [os.path.join(base, t) if t and not os.path.isabs(t) and not t.startswith(_UNRESOLVED) else t for t in targets]
+
+
 def _bash_rm_targets(cmd: str) -> list:
     """Every file path `cmd` removes via `rm` — same best-effort tokenization as
     `_bash_write_targets`, kept as its OWN small function rather than refactored to
@@ -1751,10 +1812,11 @@ def _walk(ledger) -> "_Walk":
                             # v0.8.1 (s282 F-1): the value a write sees is the one assigned BEFORE it (the real branch's ordered
                             # map); a later re-assignment no longer makes the target ambiguous and dropped
                             uamap = {}
-                            for useg in usegs:
+                            ubases = _seg_bases(usegs, ucmd)
+                            for uk, useg in enumerate(usegs):
                                 if _record_assignments(useg[2], uamap):
                                     continue
-                                for fp in _resolve_vars(_bash_write_targets(" ".join(useg[2])), ucmd, uamap):
+                                for fp in _rebase(_resolve_vars(_bash_write_targets(" ".join(useg[2])), ucmd, uamap), ubases[uk]):
                                     _wrote(fp, "")
                         else:
                             for fp in _resolve_vars(_bash_write_targets(ucmd), ucmd):
@@ -1792,12 +1854,13 @@ def _walk(ledger) -> "_Walk":
                         last_idx = max((r["index"] for r in runs), default=-1)
                         first_idx = min((r["index"] for r in runs), default=-1)
                         amap = {}                  # B5-18: assignments in ORDER, real statements only
+                        bases = _seg_bases(segs, cmd)   # 2026-11-25: a sure `cd` earlier in the command moves relative targets
                         for k, seg in enumerate(segs):
                             if failed and k >= first_idx:
                                 break              # N32: from the first verifier on, the errored call may not have run
                             if _record_assignments(seg[2], amap):
                                 continue
-                            tw = _resolve_vars(_bash_write_targets(" ".join(seg[2])), cmd, amap)
+                            tw = _rebase(_resolve_vars(_bash_write_targets(" ".join(seg[2])), cmd, amap), bases[k])
                             (after_w if runs and k > last_idx else before_w).extend(tw)
                     elif not failed:
                         before_w = _resolve_vars(_bash_write_targets(cmd), cmd)

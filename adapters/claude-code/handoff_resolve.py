@@ -17,6 +17,10 @@ CHOOSE (several), NONE, CLOSED or NOT-FOUND. It never writes a file.
   name <role> [--cwd <dir>] [--root <dir>] [--project <dir>] [--new-role]
                                        print the path to write and the `Supersedes:` line to copy: rc 0 · rc 1 refused (typo guard,
                                        same-minute file) · rc 2 not a NEOCORTEX project · rc 64 bad role slug
+  role-status <role> [--cwd <dir>] [--root <dir>] [--project <dir>]
+                                       what the record says about a role (PLAN_governance_charter_and_genesis_2026-11-19 P2a + D-5):
+                                       UNKNOWN · CONFLICT · VACANT · HELD · UNRESOLVED · CLOSED · OPEN, first match wins, with the
+                                       evidence used. rc 0 decided · rc 1 failed · rc 2 not a NEOCORTEX project · rc 64 usage
 
 Reads go through anchor_render.safe_read (no symlink, hardlink, FIFO or device; 4 MiB bound). Stdlib only, Python
 3.9-compatible syntax (the hook's interpreter chain can fall back to /usr/bin/python3 = 3.9).
@@ -59,6 +63,13 @@ FIELD = 120                          # §10.15: longest echoed title/status
 FUTURE = dt.timedelta(minutes=60)    # §10.2: a stamp later than this is refused
 SKEW = 3600                          # §10.2: seconds of mtime disagreement that earn a warning
 RECENT = dt.timedelta(days=14)       # §10.7 closed-recently line; §10.5 stale-open warning
+STATE_TIME_FROM = dt.datetime(2026, 11, 18, 9, 0, tzinfo=UTC)   # PROTOCOL step 2 (founder cards 2026-11-18): State-at-close
+                                     # bullets carry their read time; checked only on handoffs stamped from here on
+MANIFEST_FROM = dt.datetime(2026, 11, 26, 0, 0, tzinfo=UTC)    # founder 2026-11-25 19:38 ("Build it in, have the successor
+                                     # draft it"): every top-level NEOCORTEX/*.md has a MANIFEST row; checked from here on
+COVERAGE_EXCLUDE = {"STATUS.md", "JOURNAL.md", "COLD_START.md", "DANGER_MAP.md", "CAPABILITY_RADAR.md", "TODO.md",
+                    "BUG_HISTORY.md"}  # standing files, as PROJECT-A scripts/neocortex_health.py COVERAGE_EXCLUDE
+CLOCK_RE = re.compile(r"\b(?:[01]\d|2[0-3]):[0-5]\d\b")
 ARCHIVE_DEPTH = 3                    # §10.3
 MAX_LIST = 10
 MAX_WARN = 6
@@ -74,7 +85,8 @@ PREFLIGHT = ("run this project's session-start preflight as its CLAUDE.md load o
 USAGE = ("usage: handoff_resolve.py hook --root <dir> --cwd <dir>   (prompt in env _CS_PROMPT)\n"
          "       handoff_resolve.py resolve [--cwd <dir>] [--root <dir>] [--role <role>]\n"
          "       handoff_resolve.py check --file <handoff> | check <dir>\n"
-         "       handoff_resolve.py name <role> [--cwd <dir>] [--root <dir>] [--project <dir>] [--new-role]\n")
+         "       handoff_resolve.py name <role> [--cwd <dir>] [--root <dir>] [--project <dir>] [--new-role]\n"
+         "       handoff_resolve.py role-status <role> [--cwd <dir>] [--root <dir>] [--project <dir>]\n")
 
 
 class NameRefused(Exception):
@@ -232,25 +244,30 @@ class Entry(object):
         self.data = None
 
 
-def _dirs(nc):
+def _dirs(nc, errors=None):
+    """NEOCORTEX then its _archive/ tree. `errors`, when a list, receives folders os.walk could not list (role-status)."""
     yield nc, False
     arch = os.path.join(nc, "_archive")
     if not os.path.isdir(arch) or os.path.islink(arch):
         return
     base = arch.count(os.sep)
-    for d, dns, _ in os.walk(arch):
+    onerror = (lambda exc: errors.append((exc.filename or arch, "listing failed"))) if errors is not None else None
+    for d, dns, _ in os.walk(arch, onerror=onerror):
         if d.count(os.sep) - base >= ARCHIVE_DEPTH:
             dns[:] = []
         yield d, True
 
 
-def scan_names(nc, now):
-    """Conforming names of one NEOCORTEX (top level + _archive/): ({role: [Entry newest first]}, [(path, reason)])."""
+def scan_names(nc, now, errors=None):
+    """Conforming names of one NEOCORTEX (top level + _archive/): ({role: [Entry newest first]}, [(path, reason)]).
+    `errors`, when a list, receives (path, reason) for listing and stat failures (role-status, P2a); the resolver passes none."""
     roles, refused = {}, []
-    for d, archived in _dirs(nc):
+    for d, archived in _dirs(nc, errors):
         try:
             names = sorted(os.listdir(d))
         except OSError:
+            if errors is not None:
+                errors.append((d, "listing failed"))
             continue
         for n in names:
             k = _classify_name(n)
@@ -266,6 +283,8 @@ def scan_names(nc, now):
             try:
                 mtime = os.lstat(path).st_mtime
             except OSError:
+                if errors is not None:
+                    errors.append((path, "stat failed"))
                 continue
             roles.setdefault(k[1], []).append(Entry(path, k[1], k[2], archived, mtime))
     for lst in roles.values():
@@ -515,6 +534,60 @@ def answer(cwd, root, trigger, now=None):
 
 # --- closing side: check and name ---------------------------------------------------------------------------------------
 
+class ManifestError(Exception):
+    """A MANIFEST file that exists but cannot be used; the message names the file and the fault."""
+
+
+def _manifest_rows(nc):
+    """Top-level names covered by a row: a `file` value with no directory part (s508 F1: `sub/X.md` does not cover X.md), in
+    MANIFEST.json files[] / archive.rows[] and _archive/MANIFEST_ARCHIVE.json rows[]. Raises FileNotFoundError when MANIFEST.json
+    is absent, ManifestError (naming the file) when either file is unreadable or a row list is not a list (s508 F2, F7)."""
+    import json
+    names = set()
+    for rel, keys in (("MANIFEST.json", (("files",), ("archive", "rows"))), (os.path.join("_archive", "MANIFEST_ARCHIVE.json"), (("rows",),))):
+        p = os.path.join(nc, rel)
+        if not os.path.lexists(p):
+            if rel == "MANIFEST.json":
+                raise FileNotFoundError(p)
+            continue
+        try:
+            doc = json.loads(safe_read(p).decode("utf-8", errors="replace").lstrip("\ufeff"))
+        except Exception as exc:                                # noqa: BLE001 — symlink refused, bad JSON, vanished, too deep
+            raise ManifestError("%s unreadable (%s)" % (rel, _refusal(exc)))
+        if not isinstance(doc, dict):
+            raise ManifestError("%s is not a JSON object" % rel)
+        for path_keys in keys:
+            o = doc
+            for k in path_keys:
+                o = o.get(k) if isinstance(o, dict) else None
+            if o is None:
+                continue
+            if not isinstance(o, list):
+                raise ManifestError("%s %s[] is not a list" % (rel, ".".join(path_keys)))
+            for row in o:
+                if isinstance(row, dict) and isinstance(row.get("file"), str) and "/" not in row["file"] and "\\" not in row["file"]:
+                    names.add(row["file"])
+    return names
+
+
+def manifest_gaps(nc):
+    """Problems: each top-level NEOCORTEX/*.md (standing files excepted) with no MANIFEST row, or the MANIFEST unreadable.
+    Names are compared exactly (case-sensitive, as on disk; s508 F6). A symlinked .md that resolves to a file counts like a file:
+    it sits in the folder and a reader meets it there (s508 F5)."""
+    try:
+        rows = _manifest_rows(nc)
+    except FileNotFoundError:
+        return ["no MANIFEST.json in %s: create it (NEOCORTEX_SPEC §2), with one files[] row per top-level .md" % nc]
+    except ManifestError as exc:
+        return ["%s: fix it, then run check again" % exc]
+    out = []
+    for n in sorted(os.listdir(nc)):
+        if n.endswith(".md") and n not in COVERAGE_EXCLUDE and n not in rows and os.path.isfile(os.path.join(nc, n)):
+            out.append("no MANIFEST row for %s: add a files[] row {\"file\", \"genre\", \"status\", \"hook\"} to "
+                       "NEOCORTEX/MANIFEST.json" % n)
+    return out
+
+
 def check_file(path, now=None):
     """§10.5: problems with the handoff the closer just wrote ([] = conforming)."""
     now = _now(now)
@@ -563,6 +636,13 @@ def check_file(path, now=None):
         cold = _section(text, SECTIONS[0][1])
         if cold is not None and _blen(cold) > COLD_CAP:
             problems.append("Cold start section is %d B, over the 4,000 B cap" % _blen(cold))
+        state = _section(text, SECTIONS[1][1])
+        if state is not None and stamp >= STATE_TIME_FROM:
+            for ln in state.split("\n"):
+                if ln.startswith(("- ", "* ")) and not CLOCK_RE.search(ln):
+                    problems.append("State at close bullet with no read time (HH:MM): %s" % _clean(ln, 80))
+    if os.path.basename(nc) == "NEOCORTEX" and stamp >= MANIFEST_FROM:
+        problems += manifest_gaps(nc)
     return problems
 
 
@@ -614,6 +694,296 @@ def make_name(role, cwd, root, project=None, new_role=False, now=None):
     if os.path.lexists(path):
         raise NameRefused(RC_FAIL, "%s already exists (same minute): wait a minute and run `name` again" % path)
     return path, (same[0].name if same else "none")
+
+
+# --- role-status (PLAN_governance_charter_and_genesis_2026-11-19 P2a, amendment D-5) ----------------------------------------
+# Authority comes from recorded events (handoff -> TAKEN OVER), activity is advisory. A takeover event is a JOURNAL line with
+# TAKEN OVER, COLD START or "took over" that names one of the role's conforming handoffs (or "TAKEN OVER <role> from none" for a
+# first holder); "TAKEN OVER received/sent" lines relay another session's takeover and are skipped. Its title is the writer field.
+# Honest limit: an impersonated line is not detected; the founder's card is the enforcement (charter §8).
+
+DRAFT_RE = re.compile(r"^DRAFT_HANDOFF_([a-z0-9]+(?:-[a-z0-9]+)*)_(\d{4}-\d{2}-\d{2})_(\d{4})Z?[^/]*\.md$")
+JOURNAL_RE = re.compile(r"^JOURNAL(?:_[^/]*)?\.md$")
+TAKE_RE = re.compile(r"TAKEN OVER|COLD START|\btook over\b|\bcold start (?:of|from|on)\b")   # case-sensitive: "Cold start 1.6 KB"
+RELAY_RE = re.compile(r"TAKEN OVER\W{0,3}\s*(?:received|sent)\b", re.I)                      # is not an event
+# VERIFY-GATE F1: an event is the writer's own act. Negated or future wording just before the keyword, or between it and the
+# handoff name, makes the line a mention, not an event; the handoff must follow the keyword within NEAR characters.
+NEG_BEFORE = re.compile(r"\b(?:not|no|nobody|no one|never|will|would|shall|should|say|says|said|asked|whether|wants?|expected|"
+                        r"successor|next session|relayed|until|await(?:ed|ing)?)\b", re.I)
+NEG_BETWEEN = re.compile(r"\b(?:expected|will|not|pending|until|await(?:ed|ing)?)\b", re.I)
+NEAR = 120
+# VERIFY-GATE round 2 (N1): positive conditions, not only a blocklist. (a) the keyword opens the writer's statement: between
+# the title (or the line's stamp, for quoted-title forms) and the keyword only [..], (..), ":" and "*" may stand; (b) between
+# the keyword and the handoff, once quotes, brackets, parentheses, backticks and holder titles are removed, only TAKE_WORDS
+# remain; (c) no "?" or retraction word in the 30 characters after the handoff name.
+TAKE_WORDS = set("by from on of role the a an resumed resumes resume holds held cold start handoff founder founder's at desktop "
+                 "card in this chat session".split())
+GROUPS_RE = re.compile(r"\[[^\[\]]*\]|\([^()]*\)|\"[^\"]*\"|\u201c[^\u201d]*\u201d|'[^']*'|`[^`]*`")
+STAMP_RE = re.compile(r"^[-*#\s]*(?:\d{1,2}:\d{2}\s*(?:CET|CEST|EDT|EST|UTC)?\s*\(\d{4}-\d{2}-\d{2}\)\s*"   # PROJECT-A "- HH:MM CET (date)"
+                      r"|(?:\d[\d:./-]*\s*)*(?:CET|CEST|EDT|EST|UTC|Z)?\s*)(?:[\u2014\u2013-]{1,2}\s*)?(?:\((?:after close|closed)\)\s*)?[*\s]*$")
+NEG_AFTER = re.compile(r"^[^\n]{0,30}?(?:\?|\b(?:refused|failed|cancel\w*|denied|blocked|rejected|happened|undone|reverted)\b)", re.I)
+
+
+def _strip_groups(s):
+    prev = None
+    while prev != s:
+        prev, s = s, GROUPS_RE.sub(" ", s)
+    return s
+
+
+def _is_own_takeover(ln, k0, m, w, trx, role):
+    """(a)-(c) above; True only for a line where the writer states its own takeover of the handoff m names."""
+    bm = BY_RE.search(ln)
+    if bm and bm.start() == k0.start():                          # quoted-title form: only a stamp may precede the keyword
+        if not STAMP_RE.match(re.sub(r"\[[^\[\]]*\]", " ", ln[:k0.start()])):     # a stamp, maybe a [ref] tag
+            return False
+    else:
+        i = ln.find(w)
+        if i < 0 or i > k0.start():
+            return False
+        if re.sub(r"[\s:*(\[]", "", _strip_groups(ln[i + len(w):k0.start()])):
+            return False
+    between = _strip_groups(ln[k0.end():m.start()])
+    words = [x for x in re.split(r"[\s:;,.*\u2014\u2013(\[-]+", trx.sub(" ", re.sub(_title_any(role), " ", between))) if x]
+    if any(x.lower() not in TAKE_WORDS and x.lower() not in role.split("-") for x in words):
+        return False
+    rest = ln[m.end():]
+    rest = rest[3:] if rest.startswith(".md") else rest
+    return not NEG_AFTER.match(rest)
+
+
+def _title_any(role):
+    return r"(?i)\b%s \d{1,2} [a-z]{3}(?: - \d+)?\b" % r"[- ]".join(re.escape(x) for x in role.split("-"))
+ENTRY_RE = re.compile(r"^(?:[-*]|#{1,4})\s|^\d{1,4}[-:]\d")             # JOURNAL entries (bullet, heading or leading stamp) only
+# a quoted title right after the keyword ("TAKEN OVER by "X"", "TAKEN OVER governance: 'X'", "COLD START "X""), never after "from"
+BY_RE = re.compile(r"(?:TAKEN OVER|COLD START)(?:(?!from)[^\"“'\n]){0,25}[\"“']([^\"”'\n]{1,80})[\"”']")
+DASH_RE = re.compile(r"\s[—–-]{1,2}\s")
+NOTE_DRAFT = "draft present; a cold-start successor still stops and asks (PROTOCOL 99-102)"
+
+
+def _writer(line):
+    """The session title that wrote a JOURNAL line, or None."""
+    m = BY_RE.search(line)
+    if m:
+        return _clean(m.group(1), 80)
+    k = TAKE_RE.search(line)
+    head = line[:k.start()] if k else line
+    d = DASH_RE.search(head)
+    if not d:
+        return None
+    w = head[d.end():]
+    w = re.sub(r"^\((?:after close|closed)\)\s*", "", w.strip())
+    for stop in (" [", ":", " (", " — "):
+        i = w.find(stop)
+        if i > 0:
+            w = w[:i]
+    w = w.strip().strip("\"'“”").strip()
+    if not w or len(w) > 80 or TAKE_RE.match(w) or w.upper() == w:     # "FOUNDER", "SESSION CLOSE": not a session title
+        return None
+    return _clean(w, 80)
+
+
+def _role_files(nc, role, errors):
+    """(drafts [(stamp, path)], legacy [path]) of one role, top level + _archive/."""
+    drafts, legacy = [], []
+    pre = "HANDOFF_%s_" % role
+    for d, _ in _dirs(nc):
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            errors.append((d, "listing failed"))
+            continue
+        for n in names:
+            m = DRAFT_RE.match(n)
+            if m and m.group(1) == role:
+                try:
+                    s = dt.datetime.strptime(m.group(2) + m.group(3), "%Y-%m-%d%H%M").replace(tzinfo=UTC)
+                except ValueError:
+                    s = None
+                drafts.append((s, os.path.join(d, n)))
+            elif n.startswith(pre) and n.endswith(".md") and not NAME_RE.match(n):
+                legacy.append(os.path.join(d, n))
+    return drafts, legacy
+
+
+def _journal_lines(nc, errors):
+    """Every JOURNAL volume (archived volumes by name, then the live file); a line seen in two volumes counts once."""
+    vols = []
+    for d, archived in _dirs(nc):
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            errors.append((d, "listing failed"))
+            continue
+        vols += [(0 if archived else 1, os.path.join(d, n)) for n in names if JOURNAL_RE.match(n)]
+    vols.sort()
+    seen, out = set(), []
+    for _, path in vols:
+        try:
+            text = safe_read(path).decode("utf-8", errors="replace")
+        except Exception as exc:                                # noqa: BLE001 — unreadable evidence is UNKNOWN, never skipped
+            errors.append((path, _refusal(exc)))
+            continue
+        for ln in text.split("\n"):
+            s = ln.strip()
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+    return out, len(vols)
+
+
+def _title_rx(role):
+    """VERIFY-GATE F2: a holder's title has the PROTOCOL shape `<Role> <d mon>[ - N]` (e.g. "Governance 19 nov - 3")."""
+    return re.compile(r"^%s \d{1,2} [a-z]{3}\b" % r"[- ]".join(re.escape(w) for w in role.split("-")), re.I)
+
+
+def _events(lines, role):
+    """({handoff stem: [titles in order]}, [first-holder titles], [takeover-looking lines not counted], role mentions).
+    A mention is any entry naming one of the role's handoffs or written under one of its titles (SUCCESSOR and next-session
+    lines included, F6); mentions and uncounted lines keep a role from reading VACANT (F4)."""
+    hrx = re.compile(r"(?<![A-Za-z_])HANDOFF_%s_\d{4}-\d{2}-\d{2}_\d{4}Z" % re.escape(role))   # never inside DRAFT_HANDOFF_
+    nrx = re.compile(r"TAKEN OVER\s+(?:role\s+)?%s\s+from none\b|TAKEN OVER from none\b.*\b%s\b" % (re.escape(role), re.escape(role)))
+    trx = _title_rx(role)
+    took, first, blind, mentions = {}, [], [], 0
+    for ln in lines:
+        if not ENTRY_RE.match(ln):
+            continue
+        w = _writer(ln)
+        titled = bool(w and trx.match(w))
+        if hrx.search(ln) or titled:
+            mentions += 1
+        k0 = TAKE_RE.search(ln)
+        if not k0 or RELAY_RE.match(ln, k0.start()):                     # the line's event is a relay of someone else's
+            continue
+        if NEG_BEFORE.search(ln[max(0, k0.start() - 40):k0.start()]):
+            blind.append(ln)
+            continue
+        if nrx.search(ln):
+            (first if titled else blind).append(w if titled else ln)
+            continue
+        m = hrx.search(ln, k0.end())
+        if not m:
+            continue
+        if (m.start() - k0.end() > NEAR or NEG_BETWEEN.search(ln[k0.end():m.start()]) or not titled
+                or not _is_own_takeover(ln, k0, m, w, trx, role)):
+            blind.append(ln)
+            continue
+        lst = took.setdefault(m.group(0), [])
+        if w not in lst:
+            lst.append(w)
+    return took, first, blind, mentions
+
+
+def _uniq(xs):
+    out = []
+    for x in xs:
+        if x not in out:
+            out.append(x)
+    return out
+
+
+def role_status(role, cwd, root, project=None, now=None):
+    """The state of one role from the record: dict(state, title, rule, project, newest, lines). Never writes."""
+    now = _now(now)
+    if not SLUG_RE.match(role or ""):
+        raise NameRefused(RC_USAGE, "role must be lowercase letters and digits with single hyphens")
+    if project:
+        proj = canonical(os.path.abspath(project))
+        if not os.path.isdir(os.path.join(proj, "NEOCORTEX")):
+            raise NameRefused(RC_NOPROJ, "%s has no NEOCORTEX/ folder" % proj)
+    else:
+        chain = project_chain(cwd, root)
+        if not chain:
+            raise NameRefused(RC_NOPROJ, "not a NEOCORTEX project here (%s); pass --project <dir>" % canonical(os.path.abspath(cwd)))
+        proj = chain[0]
+    nc = os.path.join(proj, "NEOCORTEX")
+    errors = []
+    by_role, refused = scan_names(nc, now, errors)
+    H = by_role.get(role, [])
+    mine = [(p, why) for p, why in refused if os.path.basename(p).startswith("HANDOFF_%s_" % role)]
+    drafts, legacy = _role_files(nc, role, errors)
+    lines, nvol = _journal_lines(nc, errors)
+    took, first, blind, mentions = _events(lines, role)
+    names = set(e.name[:-3] for e in H)
+    r = {"project": proj, "role": role, "state": None, "title": None, "rule": None, "newest": None, "notes": []}
+    ev = ["evidence: %d handoff(s), %d legacy-named, %d draft(s), %d JOURNAL volume(s), %d takeover event(s)%s"
+          % (len(H), len(legacy), len(drafts), nvol, sum(len(v) for v in took.values()) + len(first),
+             ", %d unattributed" % len(blind) if blind else "")]
+
+    def done(state, rule, title=None, why=None):
+        r.update(state=state, rule=rule, title=title)
+        if why:
+            r["notes"].insert(0, why)
+        r["notes"] += ev
+        return r
+
+    newest, status = (H[0] if H else None), ""
+    if errors:
+        return done("UNKNOWN", 1, why="unreadable evidence: " + "; ".join("%s (%s)" % (os.path.basename(p) or p, w)
+                                                                          for p, w in errors[:MAX_WARN]))
+    if newest is not None:
+        try:
+            newest.data = safe_read(newest.path)
+        except Exception as exc:                                # noqa: BLE001 — never fall back to an older file
+            return done("UNKNOWN", 1, why="newest handoff %s refused (%s)" % (newest.name, _refusal(exc)))
+        r["newest"] = newest.path
+        status = _first_lines(_text(newest), 1)[0]
+        r["notes"].append("newest handoff: %s (%s)" % (newest.name, _clean(status, 60)))
+    titles = _uniq(took.get(newest.name[:-3], [])) if newest else []
+    dated = [s for s, _ in drafts if s is not None]
+    newer_draft = bool(newest and dated and max(dated) > newest.stamp)
+    if drafts and not H:
+        return done("CONFLICT", 2, why="draft handoff with no handoff: its writer may hold the role (PROTOCOL 99-102)")
+    if newer_draft and not titles:
+        return done("CONFLICT", 2, why="a draft is newer than %s and no takeover of it is recorded (PROTOCOL 99-102)" % newest.name)
+    if len(titles) >= 2:
+        return done("CONFLICT", 2, why="two titles took over %s: %s (PROTOCOL 91)" % (newest.name, ", ".join(titles)))
+    fr = _uniq(first)
+    if not H and not legacy and not drafts and not mine:
+        if not took and not fr and not blind and not mentions:
+            return done("VACANT", 3, why="no handoff, draft, legacy file, takeover or JOURNAL mention of role %s here (a typo in "
+                                         "the role or --project also gives this)" % role)
+        if len(fr) >= 2 and not took:                           # D-5 note: two first holders = CONFLICT (as PROTOCOL 91)
+            return done("CONFLICT", 2, why="two first holders recorded: %s" % ", ".join(fr))
+        if len(fr) == 1 and not took:
+            return done("HELD", 4, fr[0], why="first holder (TAKEN OVER from none)")
+    if not H:
+        return done("UNRESOLVED", 5, why="no conforming handoff, but %s" % ", ".join(
+            x for x in ("legacy-named files" if legacy else "",
+                        "journal events" if (took or fr or blind or mentions) else "",
+                        "refused handoff names" if mine else "") if x))
+    stray = sorted(k for k in took if k not in names)
+    if stray:
+        return done("UNRESOLVED", 5, why="a takeover names a handoff that is not on disk: %s" % ", ".join(stray[:3]))
+    if mine:
+        return done("UNRESOLVED", 5, why="refused handoff name(s): %s" % "; ".join("%s (%s)" % (os.path.basename(p), w) for p, w in mine[:3]))
+    if len(H) > 1 and H[0].stamp == H[1].stamp:
+        return done("UNRESOLVED", 5, why="the two newest handoffs carry the same stamp")
+    if not CLOSED_RE.match(status) and not ACTIVE_RE.match(status):         # F3: archived or not
+        return done("UNRESOLVED", 5, why="the newest handoff's Status line is not recognised")
+    m = CLOSED_RE.match(status)
+    if m and m.group(1) in ("SUPERSEDED", "ARCHIVED"):
+        return done("UNRESOLVED", 5, why="the newest handoff is %s" % m.group(1))
+    if newest.archived or m:                                    # archived + ACTIVE = CLOSED, as the resolver (D-5 note)
+        return done("CLOSED", 6, why="newest handoff %s" % ("archived" if newest.archived else m.group(1)))
+    if titles:
+        if newer_draft:
+            r["notes"].append(NOTE_DRAFT)
+        seen = [ln for ln in lines if _writer(ln) == titles[0]]
+        if seen:
+            r["notes"].append("last seen (information only): " + _clean(seen[-1], 160))
+        return done("HELD", 7, titles[0], why="%s took over %s" % (titles[0], newest.name))
+    return done("OPEN", 8, why="no takeover of %s recorded; a holder that took over without recording it writes its TAKEN OVER "
+                               "line" % newest.name)
+
+
+def render_status(r, root):
+    head = "ROLE-STATUS %s: %s" % (r["role"], r["state"]) + (' by "%s"' % r["title"] if r["title"] else "")
+    out = [head, "project: %s/  (rule %d)" % (_label(r["project"], root), r["rule"])]
+    out += ["- " + _clean(n, 240) for n in r["notes"]]
+    if r["state"] != "HELD":
+        out.append("A duty of role %s while it is not HELD: ask the founder (governance/GOVERNANCE_CHARTER.md §6)." % r["role"])
+    return "\n".join(out)
 
 
 # --- CLI ------------------------------------------------------------------------------------------------------------------
@@ -703,6 +1073,18 @@ def main(argv=None):
                 return exc.code
             print(path)
             print("Supersedes: %s" % sup)
+            return RC_OK
+        if cmd == "role-status":
+            o, pos = _opts(rest, ("--root", "--cwd", "--project"))
+            if len(pos) != 1:
+                raise UsageError("role-status")
+            root = o.get("--root") or default_root()
+            try:
+                r = role_status(pos[0], o.get("--cwd") or os.getcwd(), root, project=o.get("--project"))
+            except NameRefused as exc:
+                sys.stderr.write("handoff_resolve role-status: %s\n" % exc)
+                return exc.code
+            print(render_status(r, root))
             return RC_OK
         raise UsageError(cmd)
     except UsageError:

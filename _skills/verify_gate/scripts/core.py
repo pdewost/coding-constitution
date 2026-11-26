@@ -37,6 +37,16 @@ _FORBIDDEN_INLINE = ("attestation", "provenance", "anchor_kind", "context_isolat
 
 SEV_RANK = {"low": 1, "medium": 2, "high": 3}
 
+# receipt-v3 (RV3-3, RV3-4): v2 verdicts and attestations carry the review package's fingerprint. v1 still evaluates;
+# only v2 + v2 is issuable (receipt.issuable).
+VERDICT_V1, VERDICT_V2 = "verify_gate.verdict.v1", "verify_gate.verdict.v2"
+ATTESTATION_V1, ATTESTATION_V2 = "verify_gate.attestation.v1", "verify_gate.attestation.v2"
+_HEX = frozenset("0123456789abcdef")
+
+
+def _is_hex64(x) -> bool:
+    return isinstance(x, str) and len(x) == 64 and set(x) <= _HEX
+
 
 class ExitCode:
     PASS = 0
@@ -75,8 +85,11 @@ def _is_substantiated(finding: dict) -> bool:
 def validate_verdict_schema(v: dict) -> list[str]:
     """Structural validation. Returns a list of problems (empty == valid)."""
     problems: list[str] = []
-    if v.get("schema") != "verify_gate.verdict.v1":
-        problems.append("verdict.schema must be 'verify_gate.verdict.v1'")
+    if v.get("schema") not in (VERDICT_V1, VERDICT_V2):
+        problems.append(f"verdict.schema must be '{VERDICT_V1}' or '{VERDICT_V2}'")
+    elif v.get("schema") == VERDICT_V2 and not _is_hex64(v.get("package_sha256")):
+        # RV3-3: a v2 verdict repeats the fingerprint of the package it reviewed (64 lowercase hex)
+        problems.append("verdict.package_sha256 (64 hex) is required in a v2 verdict")
     if not v.get("producer_id"):
         problems.append("verdict.producer_id is required (who produced THIS verdict)")
     if not v.get("drafter_id"):
@@ -120,8 +133,14 @@ def has_inline_attestation(v: dict) -> bool:
 
 def validate_attestation_schema(a: dict) -> list[str]:
     problems: list[str] = []
-    if a.get("schema") != "verify_gate.attestation.v1":
-        problems.append("attestation.schema must be 'verify_gate.attestation.v1'")
+    if a.get("schema") not in (ATTESTATION_V1, ATTESTATION_V2):
+        problems.append(f"attestation.schema must be '{ATTESTATION_V1}' or '{ATTESTATION_V2}'")
+    elif a.get("schema") == ATTESTATION_V2:
+        # RV3-4: the orchestrator stamps the package it built, never one taken from the verdict
+        if not _is_hex64(a.get("package_sha256")):
+            problems.append("attestation.package_sha256 (64 hex) is required in a v2 attestation")
+        if not isinstance(a.get("package_ref"), str) or not a["package_ref"].startswith("/"):
+            problems.append("attestation.package_ref (absolute path) is required in a v2 attestation")
     ak = a.get("anchor_kind")
     if ak not in (EXTERNAL_ANCHORS | SELF_ANCHORS):
         problems.append(f"attestation.anchor_kind invalid: {ak!r}")
@@ -188,6 +207,12 @@ def evaluate(verdict: dict, attestation: dict, *, require_blocking: bool = False
     if attestation.get("producer_id") != verdict.get("producer_id"):
         return Decision(ExitCode.TAMPER, False, False,
                         ["attestation.producer_id does not match verdict.producer_id"],
+                        [], [], attestation.get("anchor_kind"))
+    # RV3-4: a v2 verdict must repeat the package the orchestrator stamped (a v1 attestation carries none to compare).
+    if (verdict.get("schema") == VERDICT_V2 and attestation.get("schema") == ATTESTATION_V2
+            and verdict.get("package_sha256") != attestation.get("package_sha256")):
+        return Decision(ExitCode.TAMPER, False, False,
+                        ["verdict reviewed another package (verdict.package_sha256 != attestation.package_sha256)"],
                         [], [], attestation.get("anchor_kind"))
 
     # Demote evidence-less findings; collect the substantiated HIGH refutations.

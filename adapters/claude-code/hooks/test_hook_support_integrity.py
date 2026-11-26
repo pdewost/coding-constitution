@@ -96,6 +96,24 @@ def test_settings_change_is_reported(ws):
     assert ".claude/settings.json: approved" in hs(ws, "--check").stdout
 
 
+@pytest.mark.parametrize("name", ["GOVERNANCE_CHARTER.md", "GOVERNANCE_DUTIES.md"])
+def test_governance_charter_files_are_governed(ws, name):
+    """P1b (PLAN_governance_charter_and_genesis_2026-11-19, D-2): the charter and duties files are H4c single files.
+    Approved -> clean; edited -> reported by --check and the stop gate; deleted -> approved but MISSING."""
+    f = ws / "governance" / name
+    f.write_text("Status: ACTIVE v1.0\n# charter\n")
+    assert "wrote 11 entries" in hs(ws, "--write-approved").stdout
+    assert ("governance/%s" % name) in (ws / "governance" / "hooks_approved.sha256").read_text()
+    assert hs(ws, "--check").returncode == 0
+    with open(f, "a") as fh:
+        fh.write("- a new duty\n")
+    r = hs(ws, "--check")
+    assert r.returncode == 1 and ("governance/%s: approved" % name) in r.stdout, r.stdout
+    assert "GOVERNOR MODIFIED (H4c)" in stop(ws).get("systemMessage", "")
+    f.unlink()
+    assert ("governance/%s: approved but MISSING" % name) in hs(ws, "--check").stdout
+
+
 def test_healthy_governor_costs_the_anchor_zero_lines(ws):
     hs(ws, "--write-approved")
     out = anchor(ws)

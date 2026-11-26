@@ -257,7 +257,11 @@ def _missing(block: str, clauses) -> list:
 # receipt-v2 R-5 (PLAN_verify_gate_receipt_v2 v0.7, approved 2026-11-10): the FS-4h clause flips. The row now states the v2 receipt
 # and its two canonical limit sentences verbatim, and none of FS-4h's four v1 limit clauses remains (README or SKILL.md).
 _RV2_LIMIT_1 = 'on a local box a determined agent can still forge the whole evidence set (attestation, verdict, receipt), and single use is per project root: moving the ledger aside reopens every spent nonce. R-1 to R-4 close the accidental paths named above; they do not raise the cryptographic floor.'
-_RV2_LIMIT_2 = "A receipt does not prove what was reviewed: a genuine clean verdict and attestation, whatever they reviewed and however old, can be bound to any later change-set, any number of times, and an edit made while a review runs is not detected (planned: receipt-v3). Validation reads the changed files one after another, so an edit made during validation can pass. The Stop hook sees edits as the transcript spells them: a write under a scratch or temp exemption (an alias or a `..` escape into the project included), a `cd` inside a command, an unexpanded variable, or a link changed before the turn ends can escape the armed check. The hooks' import guard does not authenticate modules already in sys.modules; it refuses only an unverified module cached under a scripts-file name whose file lies in the scripts folder. The CLIs have no import guard."
+# receipt-v3 RV3-8/RV3-9 (PLAN_verify_gate_receipt_v3 v0.4): sentence 1 is replaced and sentence 3 names interpreter writes
+# (RV3-11 landed only in part: db39de9a follows a `cd` in a plain `&&` chain, so the `cd` clause is narrowed, founder card
+# 2026-11-26 "Narrow to the && case"; interpreter writes stay a gap). The old sentence 1 must appear nowhere.
+_RV3_OLD_SENTENCE_1 = "A receipt does not prove what was reviewed: a genuine clean verdict and attestation, whatever they reviewed and however old, can be bound to any later change-set, any number of times, and an edit made while a review runs is not detected (planned: receipt-v3)."
+_RV2_LIMIT_2 = "A receipt proves the reviewer was handed a snapshot whose files cover the change-set with matching bytes, and one verdict earns one receipt per project ledger once the CLI spends it; it does not prove the reviewer read every file of the snapshot. Validation reads the changed files one after another, so an edit made during validation can pass. The Stop hook sees edits as the transcript spells them: a write under a scratch or temp exemption (an alias or a `..` escape into the project included), a `cd` inside a command other than a plain `&&` chain, an unexpanded variable, a file written by an interpreter (inline code or a script), or a link changed before the turn ends can escape the armed check. The hooks' import guard does not authenticate modules already in sys.modules; it refuses only an unverified module cached under a scripts-file name whose file lies in the scripts folder. The CLIs have no import guard."
 _FS4H_V1_CLAUSES = (
     "does not yet record whether its review was independent",
     "does not check that its verdict file still hashes to `verdict_sha256`",
@@ -282,6 +286,7 @@ def test_fs4h_the_verify_gate_row_states_the_receipt_contract_and_its_limits():
     assert "single-use receipt" not in row, "VERIFY-GATE row still calls the receipt single-use without its conditions"
     stale = [c for c in _FS4H_V1_CLAUSES if c in row]
     assert not stale, f"VERIFY-GATE row still states a v1 limit that receipt-v2 closed: {stale}"
+    assert _RV3_OLD_SENTENCE_1 not in row, "VERIFY-GATE row still states the v2 limit that receipt-v3 closed (RV3-8)"
 
 
 def test_fs4h_skill_md_no_longer_states_the_v1_receipt_limits():
@@ -289,6 +294,8 @@ def test_fs4h_skill_md_no_longer_states_the_v1_receipt_limits():
     flat = " ".join(skill.split())
     stale = [c for c in _FS4H_V1_CLAUSES if c in flat]
     assert not stale, f"_skills/verify_gate/SKILL.md still states a v1 receipt limit: {stale}"
+    assert _RV3_OLD_SENTENCE_1 not in flat, "_skills/verify_gate/SKILL.md still states the v2 limit receipt-v3 closed (RV3-8)"
+    assert _RV2_LIMIT_2 in flat, "_skills/verify_gate/SKILL.md lacks the receipt-v3 limit paragraph verbatim (RV3-8, RV3-9)"
 
 
 def test_fs4d_the_known_limits_name_run_time_interpreter_code():

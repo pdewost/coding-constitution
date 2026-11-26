@@ -126,7 +126,7 @@ class Fx:
         assert self.errors() == "", self.errors()
         self.code.write_text(self.code.read_text() + "# edited after verification\n")
         again = self.gate()
-        assert "receipt: change-set hash mismatch" in again, again
+        assert "receipt: package check refuses" in again, again   # RV3-5: the live re-hash replaces the change-set equality
 
     def advisory(self, cwd=None):
         r = self.run("verify_advisory.py", cwd)
@@ -134,22 +134,31 @@ class Fx:
         log = self.root / "governance" / "hook_telemetry.log"
         return log.read_text() if log.exists() else ""
 
-    def issue_receipt(self, rec_dir=None, changed=None):
-        """A valid v2 receipt at <proj>/.verify/receipt.json, made with the real receipt module."""
+    def issue_receipt(self, rec_dir=None, changed=None, ledger_path=None):
+        """A valid v3 receipt at <proj>/.verify/receipt.json, made with the real receipt and review_package modules
+        (RV3-1..RV3-5: a package outside the project, a v2 verdict and a v2 attestation naming it). Each call is a new
+        review (its own package and verdict bytes), since RV3-6 lets one verdict earn one receipt."""
+        import uuid
         sys.path.insert(0, str(REAL_SCRIPTS))
         try:
             import receipt as R
+            import review_package
         finally:
             sys.path.remove(str(REAL_SCRIPTS))
+        paths = [str(p) for p in (changed or [self.code])]
+        pkg = review_package.build(sorted({R.qualify_path(p) for p in paths}),
+                                   str(self.proj.parent / f"_vg_pkg_{uuid.uuid4().hex[:8]}"))
         v = self.proj / ".verify" / "verdict.json"
         a = self.proj / ".verify" / "attestation.json"
-        v.write_text(json.dumps({"schema": "verify_gate.verdict.v1", "artifact": "art", "drafter_id": "author",
-                                 "producer_id": "reviewer", "lenses": [{"lens": "c", "verdict": "holds", "probe": "p",
-                                                                        "findings": []}]}))
-        a.write_text(json.dumps({"schema": "verify_gate.attestation.v1", "anchor_kind": "harness_subagent",
+        v.write_text(json.dumps({"schema": "verify_gate.verdict.v2", "artifact": f"art-{uuid.uuid4().hex[:8]}",
+                                 "drafter_id": "author", "producer_id": "reviewer",
+                                 "package_sha256": pkg["package_sha256"],
+                                 "lenses": [{"lens": "c", "verdict": "holds", "probe": "p", "findings": []}]}))
+        a.write_text(json.dumps({"schema": "verify_gate.attestation.v2", "anchor_kind": "harness_subagent",
                                  "anchor_id": "s", "attestor": "orch", "producer_id": "reviewer",
-                                 "context_isolated": True}))
-        rec = R.write_receipt(changed_paths=[str(p) for p in (changed or [self.code])], verdict_path=str(v),
-                              gate_exit=0, attestation_ref=str(a))
+                                 "context_isolated": True, "package_sha256": pkg["package_sha256"],
+                                 "package_ref": os.path.realpath(pkg["package_path"])}))
+        rec = R.write_receipt(changed_paths=paths, verdict_path=str(v), gate_exit=0, attestation_ref=str(a),
+                              package_path=pkg["package_path"], ledger_path=ledger_path)
         (self.proj / ".verify" / "receipt.json").write_text(json.dumps(rec.as_dict()))
         return rec.as_dict()

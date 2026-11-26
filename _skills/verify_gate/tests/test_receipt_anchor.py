@@ -47,6 +47,7 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 
 import pytest
 
@@ -57,6 +58,7 @@ sys.path.insert(0, SCRIPTS)
 import core            # noqa: E402
 import produce_review  # noqa: E402
 import receipt as R    # noqa: E402
+import review_package  # noqa: E402
 import review_runner   # noqa: E402
 import verify_gate     # noqa: E402
 
@@ -69,16 +71,37 @@ def hi_finding():
             "evidence": {"type": "file", "ref": "src/x.py:10", "literal": "def f(:"}}
 
 
-def mk_verdict(producer="reviewer", drafter="author", refuted=False):
+def _pkg_files(paths):
+    out = []
+    for i, p in enumerate(sorted({R.qualify_path(str(x)) for x in paths})):
+        try:
+            with open(p, "rb") as fh:
+                b = fh.read()
+        except OSError:
+            b = b""
+        out.append({"path": p, "sha256": hashlib.sha256(b).hexdigest(), "size": len(b), "copy": f"package/{i}"})
+    return out
+
+
+def _pkg_sha(paths):
+    return R.package_fingerprint(_pkg_files(paths))
+
+
+def mk_verdict(producer="reviewer", drafter="author", refuted=False, pkg_sha="0" * 64, schema="verify_gate.verdict.v2"):
     lens = {"lens": "correctness", "verdict": "refuted" if refuted else "holds", "probe": "checked",
             "findings": [hi_finding()] if refuted else []}
-    return {"schema": "verify_gate.verdict.v1", "artifact": "art", "drafter_id": drafter,
-            "producer_id": producer, "lenses": [lens]}
+    v = {"schema": schema, "artifact": "art", "drafter_id": drafter, "producer_id": producer, "lenses": [lens]}
+    if schema == "verify_gate.verdict.v2":
+        v["package_sha256"] = pkg_sha
+    return v
 
 
-def mk_att(anchor_kind="harness_subagent", attestor="orchestrator", producer="reviewer", iso=True):
-    return {"schema": "verify_gate.attestation.v1", "anchor_kind": anchor_kind, "anchor_id": "sub-123",
-            "attestor": attestor, "producer_id": producer, "context_isolated": iso}
+def mk_att(anchor_kind="harness_subagent", attestor="orchestrator", producer="reviewer", iso=True, pkg=None):
+    sha = pkg["package_sha256"] if pkg else "0" * 64
+    ref = os.path.realpath(pkg["package_path"]) if pkg else "/pkg/package.json"
+    return {"schema": "verify_gate.attestation.v2", "anchor_kind": anchor_kind, "anchor_id": "sub-123",
+            "attestor": attestor, "producer_id": producer, "context_isolated": iso,
+            "package_sha256": sha, "package_ref": ref}
 
 
 def mk_root(tmp_path, name="proj"):
@@ -98,10 +121,15 @@ def put(path, obj):
 
 
 def issue(root, code, *, verdict=None, att=None):
-    """Write a verdict + attestation and issue a v2 receipt through write_receipt; returns (receipt dict, vpath, apath)."""
-    v = put(root / "verdict.json", verdict or mk_verdict())
-    a = put(root / "attestation.json", att or mk_att())
-    rec = R.write_receipt(changed_paths=[str(code)], verdict_path=str(v), gate_exit=0, attestation_ref=str(a))
+    """Build a package, write verdict + attestation and issue a v3 receipt; returns (receipt dict, vpath, apath)."""
+    pkg = review_package.build([str(code)], str(root.parent / f"_pkg_{uuid.uuid4().hex[:8]}"))
+    vobj = {**(verdict or mk_verdict()), "package_sha256": pkg["package_sha256"]}
+    aobj = {**(att or mk_att()), "package_sha256": pkg["package_sha256"],
+            "package_ref": os.path.realpath(pkg["package_path"])}
+    v = put(root / "verdict.json", vobj)
+    a = put(root / "attestation.json", aobj)
+    rec = R.write_receipt(changed_paths=[str(code)], verdict_path=str(v), gate_exit=0, attestation_ref=str(a),
+                          package_path=pkg["package_path"])
     return rec.as_dict(), v, a
 
 
@@ -113,7 +141,8 @@ def validate(rec, code, root, **kw):
 def test_control_anchored_clean_receipt_is_valid(tmp_path):
     root, code = mk_root(tmp_path)
     rec, _v, _a = issue(root, code)
-    assert rec["schema"] == "verify_gate.receipt.v2"
+    # RV3-5: write_receipt now emits verify_gate.receipt.v3 bound to the review package
+    assert rec["schema"] == "verify_gate.receipt.v3"
     assert os.path.isabs(rec["verdict_ref"]) and os.path.isabs(rec["attestation_ref"])
     assert rec["attestation_sha256"]
     assert validate(rec, code, root) == (True, "receipt valid for the current change-set")
@@ -121,13 +150,15 @@ def test_control_anchored_clean_receipt_is_valid(tmp_path):
 
 # ---- T9 / T10 (R-1): issue only what an armed gate may accept ----------------------------------------------------------
 def _cli_issue(tmp_path, verdict, att):
-    v = put(tmp_path / "v.json", verdict)
-    a = put(tmp_path / "a.json", att)
     out = tmp_path / "receipt.json"
     code = tmp_path / "code.py"
     code.write_text("x = 1\n")
+    pkg = review_package.build([str(code)], str(tmp_path / "pkg"))
+    v = put(tmp_path / "v.json", {**verdict, "package_sha256": pkg["package_sha256"]})
+    a = put(tmp_path / "a.json", {**att, "package_sha256": pkg["package_sha256"],
+                                  "package_ref": os.path.realpath(pkg["package_path"])})
     rc = verify_gate.main(["--verdict", str(v), "--attestation", str(a), "--changed", str(code),
-                           "--write-receipt", str(out)])
+                           "--write-receipt", str(out), "--package", pkg["package_path"]])
     return rc, out
 
 
@@ -135,10 +166,11 @@ def _produce_issue(tmp_path, verdict, orchestrator_id):
     code = tmp_path / "code.py"
     code.write_text("x = 1\n")
     outdir = tmp_path / "out"
+    vobj = {**verdict, "package_sha256": _pkg_sha([code])}
     res = produce_review.produce(artifact="art", evidence=[{"type": "file", "ref": "x:1"}], drafter_id="author",
                                  producer_id="reviewer", backend="harness_subagent", orchestrator_id=orchestrator_id,
                                  anchor_id="sub-9", outdir=str(outdir), changed_paths=[str(code)],
-                                 agent_verdict=verdict)
+                                 agent_verdict=vobj)
     return res, outdir / "receipt.json"
 
 
@@ -189,7 +221,7 @@ def test_t11b_attestation_for_another_producer_is_invalid_though_hashes_agree(tm
     root, code = mk_root(tmp_path)
     rec, _v, a = issue(root, code)
     import hashlib
-    new = mk_att(producer="someone-else")                    # same anchor_kind / attestor / context_isolated
+    new = {**json.loads(a.read_text()), "producer_id": "someone-else"}  # same anchor_kind / attestor / context_isolated
     a.write_text(json.dumps(new))
     rec["attestation_sha256"] = hashlib.sha256(a.read_bytes()).hexdigest()   # only evaluate can refuse it now
     ok, why = validate(rec, code, root)
@@ -223,7 +255,8 @@ def test_t13_fresh_v1_receipt_is_invalid_with_a_reissue_reason(tmp_path):
     rec, _v, _a = issue(root, code)
     rec["schema"] = "verify_gate.receipt.v1"
     ok, why = validate(rec, code, root)
-    assert not ok and "re-issue under v2" in why, why
+    # D-1: pre-v3 receipts are refused with "re-issue under v3"
+    assert not ok and "re-issue under v3" in why, why
 
 
 # ---- T15: safe reads, each within 2 s ---------------------------------------------------------------------------------
@@ -286,10 +319,11 @@ def test_t15_changed_paths_must_be_plain_files(tmp_path, kind):
     extra.write_text("y = 1\n")
     target = tmp_path / "t.py"                               # s239 H-6: the link target exists BEFORE issuance, so its mtime
     target.write_bytes(extra.read_bytes())                   # is older than the receipt and only the no-follow check can refuse
-    v = put(root / "verdict.json", mk_verdict())
-    a = put(root / "attestation.json", mk_att())
+    pkg = review_package.build([str(code), str(extra)], str(tmp_path / "pkg"))
+    v = put(root / "verdict.json", mk_verdict(pkg_sha=pkg["package_sha256"]))
+    a = put(root / "attestation.json", mk_att(pkg=pkg))
     rec = R.write_receipt(changed_paths=[str(code), str(extra)], verdict_path=str(v), gate_exit=0,
-                          attestation_ref=str(a)).as_dict()
+                          attestation_ref=str(a), package_path=pkg["package_path"]).as_dict()
     ok, why, _ = _validate_isolated(rec, [code, extra], root)
     assert ok, "control: the plain-file change-set validates: " + why
     saved = extra.read_bytes()
@@ -300,7 +334,8 @@ def test_t15_changed_paths_must_be_plain_files(tmp_path, kind):
         assert target.read_bytes() == saved
         os.symlink(target, extra)
     why = _timed_invalid(rec, [code, extra], root)
-    assert "changed path unsafe" in why, why
+    # RV3-5: _package_checks replaces _hash_changed during validation and reports "package check refuses"
+    assert "package check refuses" in why, why
 
 
 @pytest.mark.parametrize("kind", ["fifo", "symlink"])
@@ -332,10 +367,12 @@ def test_t15_receipt_issued_through_a_symlinked_artifact_folder_stays_valid(tmp_
     real = tmp_path / "real_art"
     real.mkdir()
     os.symlink(real, tmp_path / "linked_art")
-    v = put(real / "verdict.json", mk_verdict())
-    a = put(real / "attestation.json", mk_att())
+    pkg = review_package.build([str(code)], str(real / "pkg"))
+    v = put(real / "verdict.json", mk_verdict(pkg_sha=pkg["package_sha256"]))
+    a = put(real / "attestation.json", mk_att(pkg=pkg))
     rec = R.write_receipt(changed_paths=[str(code)], verdict_path=str(tmp_path / "linked_art" / "verdict.json"),
-                          gate_exit=0, attestation_ref=str(tmp_path / "linked_art" / "attestation.json")).as_dict()
+                          gate_exit=0, attestation_ref=str(tmp_path / "linked_art" / "attestation.json"),
+                          package_path=str(tmp_path / "linked_art" / "pkg" / "package.json")).as_dict()
     assert "linked_art" not in rec["verdict_ref"] and "linked_art" not in rec["attestation_ref"]
     ok, why = validate(rec, code, root)
     assert ok, why
@@ -358,7 +395,9 @@ def test_t12_a_spent_receipt_copied_elsewhere_is_a_replay(tmp_path):
     copy = put(copy_dir / "receipt.json", rec)
     r2 = _run_cli("--receipt", str(copy), "--changed", str(code))
     assert r2.returncode == RECEIPT_INVALID and "replay" in r2.stdout, r2.stdout
-    assert json.loads((root / ".verify" / "_consumed_nonces.json").read_text()) == [rec["nonce"]]
+    # RV3-6: the ledger is now {"nonces": [...], "verdicts": [...]}
+    assert json.loads((root / ".verify" / "_consumed_nonces.json").read_text()) == {
+        "nonces": [rec["nonce"]], "verdicts": [rec["verdict_sha256"]]}
     assert not (copy_dir / "_consumed_nonces.json").exists()
 
 
@@ -368,14 +407,17 @@ def test_t16_the_cli_spends_into_the_project_ledger_not_a_decoy(tmp_path):
     (sub / ".verify").mkdir(parents=True)                       # a decoy `.verify/` without NEOCORTEX/
     inner = sub / "inner.py"
     inner.write_text("y = 2\n")
-    v = put(root / "verdict.json", mk_verdict())
-    a = put(root / "attestation.json", mk_att())
+    pkg = review_package.build([str(inner)], str(tmp_path / "pkg"))
+    v = put(root / "verdict.json", mk_verdict(pkg_sha=pkg["package_sha256"]))
+    a = put(root / "attestation.json", mk_att(pkg=pkg))
     rec = R.write_receipt(changed_paths=[str(inner)], verdict_path=str(v), gate_exit=0,
-                          attestation_ref=str(a)).as_dict()
+                          attestation_ref=str(a), package_path=pkg["package_path"]).as_dict()
     rp = put(sub / ".verify" / "receipt.json", rec)
     r = _run_cli("--receipt", str(rp), "--changed", str(inner))
     assert r.returncode == 0, r.stdout + r.stderr
-    assert json.loads((root / ".verify" / "_consumed_nonces.json").read_text()) == [rec["nonce"]]
+    # RV3-6: the ledger is now {"nonces": [...], "verdicts": [...]}
+    assert json.loads((root / ".verify" / "_consumed_nonces.json").read_text()) == {
+        "nonces": [rec["nonce"]], "verdicts": [rec["verdict_sha256"]]}
     assert not (sub / ".verify" / "_consumed_nonces.json").exists()
     # the gate reads <project>/.verify/_consumed_nonces.json: the same receipt is now a replay for it
     ok, why = R.validate_receipt(rec, changed_paths=[str(inner)],
@@ -515,10 +557,22 @@ import pathlib  # noqa: E402
 
 
 def _issue_args(tmp_path, changed, out="receipt.json"):
-    v = put(tmp_path / "v.json", mk_verdict())
-    a = put(tmp_path / "a.json", mk_att())
+    files = _pkg_files(changed)
+    sha = R.package_fingerprint(files)
+    # s329 F-6: a package's snapshot copies are checked, so the fixture writes them (the bytes _pkg_files hashed)
+    (tmp_path / "package").mkdir(exist_ok=True)
+    for f in files:
+        try:
+            with open(f["path"], "rb") as fh:
+                b = fh.read()
+        except OSError:
+            b = b""
+        (tmp_path / f["copy"]).write_bytes(b)
+    p = put(tmp_path / "package.json", {"schema": R.PACKAGE_SCHEMA, "files": files, "built_ts": time.time()})
+    v = put(tmp_path / "v.json", mk_verdict(pkg_sha=sha))
+    a = put(tmp_path / "a.json", mk_att(pkg={"package_sha256": sha, "package_path": str(p)}))
     return ["--verdict", str(v), "--attestation", str(a), "--changed", *[str(c) for c in changed],
-            "--write-receipt", str(tmp_path / out)]
+            "--write-receipt", str(tmp_path / out), "--package", str(p)]
 
 
 def _decision(capsys):
@@ -645,11 +699,13 @@ def test_t15_produce_review_refuses_an_unsafe_changed_path_with_its_reason(tmp_p
     os.symlink(real, tmp_path / "lnk")
     path = tmp_path / "lnk" / "x.py"
     outdir = tmp_path / "out"
+    # RV3-1: the package is built before the judge runs; an unsafe path is still a reported refusal (exit 6), never a raise
     res = produce_review.produce(artifact="art", evidence=[{"type": "file", "ref": "x:1"}], drafter_id="author",
                                  producer_id="reviewer", backend="harness_subagent", orchestrator_id="orchestrator",
                                  anchor_id="sub-9", outdir=str(outdir), changed_paths=[str(path)], agent_verdict=mk_verdict())
     assert res["receipt_path"] is None and not (outdir / "receipt.json").exists(), res
     assert str(path) in res["receipt_refused"], res
+    assert res["exit"] == core.ExitCode.RECEIPT_INVALID, res
 
 
 def test_t15_produce_review_qualifies_a_relative_changed_path(tmp_path, monkeypatch):
@@ -658,7 +714,7 @@ def test_t15_produce_review_qualifies_a_relative_changed_path(tmp_path, monkeypa
     res = produce_review.produce(artifact="art", evidence=[{"type": "file", "ref": "x:1"}], drafter_id="author",
                                  producer_id="reviewer", backend="harness_subagent", orchestrator_id="orchestrator",
                                  anchor_id="sub-9", outdir=str(root / "out"), changed_paths=["code.py"],
-                                 agent_verdict=mk_verdict())
+                                 agent_verdict=mk_verdict(pkg_sha=_pkg_sha([code])))
     rec = json.loads(open(res["receipt_path"]).read())
     ok, why = validate(rec, str(root) + "/code.py", root)
     assert ok, why
@@ -722,7 +778,8 @@ def test_t13b_v1_receipt_with_unreadable_artifacts_is_refused_on_its_schema_firs
         os.mkfifo(v)
         os.mkfifo(a)
     why = _timed_invalid(rec, [code], root)
-    assert "re-issue under v2" in why, why
+    # D-1: pre-v3 receipts are refused with "re-issue under v3"
+    assert "re-issue under v3" in why, why
 
 
 # ======================================================================================================================
@@ -1004,12 +1061,18 @@ def test_t17_cli_relative_changed_path_without_a_root_is_qualified_by_the_cwd(tm
 LIMIT_1 = ("on a local box a determined agent can still forge the whole evidence set (attestation, verdict, receipt), and "
            "single use is per project root: moving the ledger aside reopens every spent nonce. R-1 to R-4 close the "
            "accidental paths named above; they do not raise the cryptographic floor.")
-LIMIT_2 = ("A receipt does not prove what was reviewed: a genuine clean verdict and attestation, whatever they reviewed "
-           "and however old, can be bound to any later change-set, any number of times, and an edit made while a review runs "
-           "is not detected (planned: receipt-v3). Validation reads the changed files one after another, so an edit made "
+# RV3-8 / RV3-9: sentence 1 replaced, sentence 3 names interpreter writes (pre-RV3-11 wording); the old sentence 1 is gone.
+OLD_LIMIT_2_SENTENCE_1 = ("A receipt does not prove what was reviewed: a genuine clean verdict and attestation, whatever they "
+                          "reviewed and however old, can be bound to any later change-set, any number of times, and an edit "
+                          "made while a review runs is not detected (planned: receipt-v3).")
+LIMIT_2 = ("A receipt proves the reviewer was handed a snapshot whose files cover the change-set with matching bytes, and one "
+           "verdict earns one receipt per project ledger once the CLI spends it; it does not prove the reviewer read every "
+           "file of the snapshot. Validation reads the changed files one after another, so an edit made "
            "during validation can pass. The Stop hook sees edits as the transcript spells them: a write under a scratch or "
-           "temp exemption (an alias or a `..` escape into the project included), a `cd` inside a command, an unexpanded "
-           "variable, or a link changed before the turn ends can escape the armed check. The hooks' import guard does not "
+           "temp exemption (an alias or a `..` escape into the project included), a `cd` inside a command other than a "
+           "plain `&&` chain, an unexpanded "                     # founder card 2026-11-26 "Narrow to the && case"
+           "variable, a file written by an interpreter (inline code or a script), or a link changed before the turn ends "
+           "can escape the armed check. The hooks' import guard does not "
            "authenticate modules already in sys.modules; it refuses only an unverified module cached under a scripts-file "
            "name whose file lies in the scripts folder. The CLIs have no import guard.")
 
@@ -1018,10 +1081,12 @@ def _skill_text():
     return " ".join(open(os.path.join(HERE, "..", "SKILL.md"), encoding="utf-8").read().split())
 
 
-def test_r5_skill_md_is_0_4_0_and_carries_both_canonical_limit_sentences_verbatim():
+def test_r5_skill_md_is_0_5_0_and_carries_both_canonical_limit_sentences_verbatim():
+    # RV3-8: verify_gate 0.5.0; the receipt-v3 paragraph replaces the v2 one
     t = _skill_text()
-    assert "version: 0.4.0" in t
+    assert "version: 0.5.0" in t
     assert LIMIT_1 in t and LIMIT_2 in t
+    assert OLD_LIMIT_2_SENTENCE_1 not in t
 
 
 def test_r5_skill_md_usage_has_no_ledger_option_and_says_receipt_mode_serves_armed_roots():
@@ -1042,7 +1107,8 @@ def test_r5_skill_md_changelog_lists_every_shape_that_turns_invalid():
 
 def test_r5_verify_gate_usage_block_drops_ledger_and_says_emit_on_an_anchored_clean_pass():
     doc = verify_gate.__doc__
-    assert "--ledger" not in doc and "emit one on an anchored, clean PASS" in doc and "armed roots" in doc
+    # RV3-7: --write-receipt usage now requires --package and says "emit one on an anchored, clean v2 PASS over that package"
+    assert "--ledger" not in doc and "emit one on an anchored, clean v2 PASS over that package" in doc and "armed roots" in doc
 
 
 def test_r5_the_receipt_valid_line_says_the_receipt_is_spent(tmp_path):
@@ -1076,19 +1142,20 @@ def _swap_after_load(monkeypatch, basename, new_obj):
 
 def test_s241_f2_write_receipt_refuses_an_artifact_the_gate_would_not_accept(tmp_path):
     root, code = mk_root(tmp_path)
-    v = put(root / "verdict.json", mk_verdict())
-    a = put(root / "attestation.json", mk_att(anchor_kind="self", attestor="reviewer"))     # un-anchored: not issuable
+    pkg = review_package.build([str(code)], str(tmp_path / "pkg"))
+    v = put(root / "verdict.json", mk_verdict(pkg_sha=pkg["package_sha256"]))
+    a = put(root / "attestation.json", mk_att(anchor_kind="self", attestor="reviewer", pkg=pkg))     # un-anchored: not issuable
     with pytest.raises(R.UnsafeFile):
-        R.write_receipt(changed_paths=[str(code)], verdict_path=str(v), gate_exit=0, attestation_ref=str(a))
+        R.write_receipt(changed_paths=[str(code)], verdict_path=str(v), gate_exit=0, attestation_ref=str(a),
+                        package_path=pkg["package_path"])
 
 
 def test_s241_f2_cli_artifact_replaced_between_load_and_issuance_issues_no_receipt(tmp_path, monkeypatch):
-    v = put(tmp_path / "v.json", mk_verdict())
-    a = put(tmp_path / "attestation.json", mk_att())
     out, code = tmp_path / "receipt.json", tmp_path / "code.py"
     code.write_text("x = 1\n")
-    _swap_after_load(monkeypatch, "attestation.json", mk_att(anchor_kind="self", attestor="reviewer"))
-    rc = verify_gate.main(["--verdict", str(v), "--attestation", str(a), "--changed", str(code), "--write-receipt", str(out)])
+    args = _issue_args(tmp_path, [code])
+    _swap_after_load(monkeypatch, "a.json", mk_att(anchor_kind="self", attestor="reviewer"))
+    rc = verify_gate.main(args)
     assert not out.exists(), "a receipt was issued over bytes the gate would refuse"
     assert rc != core.ExitCode.PASS
 
@@ -1100,7 +1167,8 @@ def test_s241_f2_produce_artifact_replaced_between_load_and_issuance_issues_no_r
     _swap_after_load(monkeypatch, "attestation.json", mk_att(anchor_kind="self", attestor="reviewer"))
     res = produce_review.produce(artifact="art", evidence=[{"type": "file", "ref": "x:1"}], drafter_id="author",
                                  producer_id="reviewer", backend="harness_subagent", orchestrator_id="orchestrator",
-                                 anchor_id="sub-9", outdir=str(outdir), changed_paths=[str(code)], agent_verdict=mk_verdict())
+                                 anchor_id="sub-9", outdir=str(outdir), changed_paths=[str(code)],
+                                 agent_verdict=mk_verdict(pkg_sha=_pkg_sha([code])))
     assert res["receipt_path"] is None and not (outdir / "receipt.json").exists(), res
     assert res["receipt_refused"], res
 
@@ -1134,24 +1202,24 @@ def test_s241_f4_safe_read_wraps_an_fstat_oserror_as_unsafefile(tmp_path, monkey
 
 
 def test_s241_f4_a_vanished_artifact_refuses_at_both_entry_points(tmp_path, monkeypatch):
-    v = put(tmp_path / "v.json", mk_verdict())
-    a = put(tmp_path / "attestation.json", mk_att())
     out, code = tmp_path / "receipt.json", tmp_path / "code.py"
     code.write_text("x = 1\n")
+    args = _issue_args(tmp_path, [code])
     real = core.load_json
 
     def load(path):
         o = real(path)
-        if os.path.basename(path) == "attestation.json":
+        if os.path.basename(path) in ("a.json", "attestation.json"):
             os.unlink(path)
         return o
     monkeypatch.setattr(core, "load_json", load)
-    rc = verify_gate.main(["--verdict", str(v), "--attestation", str(a), "--changed", str(code), "--write-receipt", str(out)])
+    rc = verify_gate.main(args)
     assert rc != core.ExitCode.PASS and not out.exists()
     outdir = tmp_path / "out"
     res = produce_review.produce(artifact="art", evidence=[{"type": "file", "ref": "x:1"}], drafter_id="author",
                                  producer_id="reviewer", backend="harness_subagent", orchestrator_id="orchestrator",
-                                 anchor_id="sub-9", outdir=str(outdir), changed_paths=[str(code)], agent_verdict=mk_verdict())
+                                 anchor_id="sub-9", outdir=str(outdir), changed_paths=[str(code)],
+                                 agent_verdict=mk_verdict(pkg_sha=_pkg_sha([code])))
     assert res["receipt_path"] is None and res["receipt_refused"], res
 
 
@@ -1170,7 +1238,8 @@ def test_s241_f6_a_bad_schema_is_refused_before_any_artifact_is_read(tmp_path, m
     monkeypatch.setattr(R, "_safe_read", sentinel)
     monkeypatch.setattr(R, "_safe_read_bytes", sentinel)
     ok, why = validate(rec, code, root)
-    assert not ok and ("re-issue under v2" in why or "bad receipt schema" in why), why
+    # D-1: pre-v3 receipts are refused with "re-issue under v3"
+    assert not ok and ("re-issue under v3" in why or "bad receipt schema" in why), why
 
 
 # ---- s241 survivors of the slot run on 30de4ae (R-3) -----------------------------------------------------------------------------

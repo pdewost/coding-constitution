@@ -372,23 +372,36 @@ def test_verify_armed_false_when_edited_files_resolve_to_no_project(tmp_path):
 
 
 def _write_valid_receipt(root, changed_paths) -> None:
-    """A genuinely valid v2 .verify/receipt.json, via the REAL receipt module (real verdict and attestation files,
-    anchored and clean) — not a hand-rolled schema."""
-    sys.path.insert(0, str(ROOT / "_skills" / "verify_gate" / "scripts"))
+    """A genuinely valid v3 .verify/receipt.json, via the REAL receipt and review_package modules (a real package, v2
+    verdict and v2 attestation files, anchored and clean; RV3-1..RV3-5) — not a hand-rolled schema."""
+    import os
+    # The scripts folder is found by walking up from this file: ROOT is the workspace root here, but `adapters/` in the
+    # published kit (hooks under adapters/claude-code/hooks/), where a fixed depth could not import review_package
+    # (v0.15.0 release check, 2026-11-26; `receipt` had only resolved through a module another test had cached).
+    scripts = next((p / "_skills" / "verify_gate" / "scripts" for p in HOOK.parents
+                    if (p / "_skills" / "verify_gate" / "scripts" / "review_package.py").is_file()),
+                   ROOT / "_skills" / "verify_gate" / "scripts")
+    sys.path.insert(0, str(scripts))
     import receipt as receipt_mod  # noqa: E402
+    import review_package  # noqa: E402
     vdir = Path(root) / ".verify"
     vdir.mkdir(exist_ok=True)
     (vdir / "armed").write_text("", encoding="utf-8")
+    paths = sorted({receipt_mod.qualify_path(str(p)) for p in changed_paths})
+    pkg = review_package.build(paths, str(Path(root).parent / "_vg_pkg"))
     verdict_path, att_path = vdir / "verdict.json", vdir / "attestation.json"
     verdict_path.write_text(json.dumps({
-        "schema": "verify_gate.verdict.v1", "artifact": "a", "drafter_id": "author", "producer_id": "reviewer",
+        "schema": "verify_gate.verdict.v2", "artifact": "a", "drafter_id": "author", "producer_id": "reviewer",
+        "package_sha256": pkg["package_sha256"],
         "lenses": [{"lens": "c", "verdict": "holds", "probe": "p", "findings": []}]}), encoding="utf-8")
     att_path.write_text(json.dumps({
-        "schema": "verify_gate.attestation.v1", "anchor_kind": "harness_subagent", "anchor_id": "s",
-        "attestor": "orch", "producer_id": "reviewer", "context_isolated": True}), encoding="utf-8")
+        "schema": "verify_gate.attestation.v2", "anchor_kind": "harness_subagent", "anchor_id": "s",
+        "attestor": "orch", "producer_id": "reviewer", "context_isolated": True,
+        "package_sha256": pkg["package_sha256"], "package_ref": os.path.realpath(pkg["package_path"])}),
+        encoding="utf-8")
     rec = receipt_mod.write_receipt(
-        changed_paths=[str(p) for p in changed_paths], verdict_path=str(verdict_path),
-        gate_exit=0, attestation_ref=str(att_path))
+        changed_paths=paths, verdict_path=str(verdict_path),
+        gate_exit=0, attestation_ref=str(att_path), package_path=pkg["package_path"])
     (vdir / "receipt.json").write_text(json.dumps(rec.as_dict()), encoding="utf-8")
 
 
@@ -422,4 +435,4 @@ def test_has_valid_receipt_false_when_the_changeset_no_longer_matches(tmp_path):
     _write_valid_receipt(proj, [target])
     target.write_text("print('CHANGED')\n", encoding="utf-8")
     ok, why = mod._has_valid_receipt([str(target)], [str(target)])
-    assert ok is False and "change-set hash mismatch" in why
+    assert ok is False and "package check refuses" in why   # RV3-5: the live re-hash replaces the change-set equality

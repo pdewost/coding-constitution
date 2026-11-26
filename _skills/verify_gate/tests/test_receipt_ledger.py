@@ -12,6 +12,7 @@ Run: python3.12 -m pytest _skills/verify_gate/tests/ -q
 import builtins
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -24,6 +25,7 @@ SCRIPTS = os.path.join(HERE, "..", "scripts")
 sys.path.insert(0, SCRIPTS)
 
 import receipt as R    # noqa: E402
+import review_package  # noqa: E402
 import verify_gate     # noqa: E402
 
 RECEIPT_INVALID = 6
@@ -91,27 +93,37 @@ sys.exit(verify_gate.main(sys.argv[7:]))
 '''
 
 
-_VERDICT = {"schema": "verify_gate.verdict.v1", "artifact": "art", "drafter_id": "author", "producer_id": "reviewer",
+_VERDICT = {"schema": "verify_gate.verdict.v2", "artifact": "art", "drafter_id": "author", "producer_id": "reviewer",
             "lenses": [{"lens": "correctness", "verdict": "holds", "probe": "checked", "findings": []}]}
-_ATT = {"schema": "verify_gate.attestation.v1", "anchor_kind": "harness_subagent", "anchor_id": "sub-123",
+_ATT = {"schema": "verify_gate.attestation.v2", "anchor_kind": "harness_subagent", "anchor_id": "sub-123",
         "attestor": "orchestrator", "producer_id": "reviewer", "context_isolated": True}
 
 
 def _setup(tmp_path):
-    """0.4.0 (R-2/R-3): tmp_path is a marked project root (NEOCORTEX/ + .verify/armed); the verdict and the attestation are
-    real, anchored and clean; the ledger is the project's own, which the CLI derives from the changed files."""
+    """receipt-v3 (RV3-1..RV3-6): tmp_path is a marked project root (NEOCORTEX/ + .verify/armed); the package, v2 verdict
+    and v2 attestation are real, anchored and clean; the ledger is the project's own, derived from the changed files."""
     (tmp_path / "NEOCORTEX").mkdir(exist_ok=True)
     (tmp_path / ".verify").mkdir(exist_ok=True)
     (tmp_path / ".verify" / "armed").write_text("")
     code = tmp_path / "code.py"; code.write_text("x = 1\n")
-    verdict = tmp_path / "verdict.json"; verdict.write_text(json.dumps(_VERDICT))
-    (tmp_path / "attestation.json").write_text(json.dumps(_ATT))
+    shutil.rmtree(tmp_path / "pkg", ignore_errors=True)
+    pkg = review_package.build([str(code)], str(tmp_path / "pkg"))
+    verdict = tmp_path / "verdict.json"
+    verdict.write_text(json.dumps({**_VERDICT, "package_sha256": pkg["package_sha256"]}))
+    (tmp_path / "attestation.json").write_text(json.dumps({
+        **_ATT, "package_sha256": pkg["package_sha256"], "package_ref": os.path.realpath(pkg["package_path"])}))
     return code, verdict, tmp_path / ".verify" / "_consumed_nonces.json"
 
 
 def _receipt(tmp_path, code, verdict, name="receipt.json", **override):
-    rec = R.write_receipt(changed_paths=[str(code)], verdict_path=str(verdict), gate_exit=0,
-                          attestation_ref=str(tmp_path / "attestation.json")).as_dict()
+    vpath = verdict
+    if name != "receipt.json":
+        vpath = tmp_path / f"verdict_{name}"
+        vpath.write_text(json.dumps({**json.loads(verdict.read_text()), "artifact": name}))
+    rec = R.write_receipt(changed_paths=[str(code)], verdict_path=str(vpath), gate_exit=0,
+                          attestation_ref=str(tmp_path / "attestation.json"),
+                          package_path=str(tmp_path / "pkg" / "package.json"),
+                          ledger_path=str(tmp_path / "_issue_ledger.json")).as_dict()
     rec.update(override)
     for k in [k for k, v in override.items() if v is _DROP]:
         del rec[k]
@@ -152,7 +164,8 @@ def test_t1_eight_runs_on_one_receipt_exactly_one_passes(tmp_path):
     rp, rec = _receipt(tmp_path, code, verdict)
     rcs = _spawn(tmp_path, [_cli(rp, code, ledger)] * N)
     assert sorted(rcs) == [0] + [RECEIPT_INVALID] * (N - 1), rcs
-    assert json.loads(ledger.read_text()) == [rec["nonce"]]
+    # RV3-6: the ledger is now {"nonces": [...], "verdicts": [...]}
+    assert json.loads(ledger.read_text()) == {"nonces": [rec["nonce"]], "verdicts": [rec["verdict_sha256"]]}
 
 
 def test_t1_stress_twenty_unforced_rounds(tmp_path):
@@ -173,7 +186,9 @@ def test_t2_eight_distinct_receipts_all_recorded(tmp_path):
     recs = [_receipt(tmp_path, code, verdict, name=f"r{i}.json") for i in range(N)]
     rcs = _spawn(tmp_path, [_cli(rp, code, ledger) for rp, _ in recs])
     assert rcs == [0] * N, rcs
-    assert sorted(json.loads(ledger.read_text())) == sorted(r["nonce"] for _, r in recs)
+    # RV3-6: the ledger records both spent nonces and spent verdict sha256s
+    assert json.loads(ledger.read_text()) == {
+        "nonces": sorted(r["nonce"] for _, r in recs), "verdicts": sorted(r["verdict_sha256"] for _, r in recs)}
 
 
 # ---- T3 / T4: the ledger's own state ----------------------------------------------------------------------------
@@ -195,7 +210,8 @@ def test_t4_absent_ledger_is_empty_then_holds_one_nonce(tmp_path):
     rp, rec = _receipt(tmp_path, code, verdict)
     assert not ledger.exists()
     assert verify_gate.main(_cli(rp, code, ledger)) == 0
-    assert json.loads(ledger.read_text()) == [rec["nonce"]]
+    # RV3-6: the ledger is now {"nonces": [...], "verdicts": [...]}
+    assert json.loads(ledger.read_text()) == {"nonces": [rec["nonce"]], "verdicts": [rec["verdict_sha256"]]}
 
 
 # ---- T5 / T5b: the commit point ---------------------------------------------------------------------------------
@@ -228,7 +244,8 @@ def test_t5b_folder_fsync_failure_after_replace_is_distinct_and_spends(tmp_path,
     monkeypatch.setattr(sys, "platform", "linux")  # 0.3.1: on Darwin F_FULLFSYNC (T15) syncs the folder first
     ok, why = R.validate_and_consume(rec, changed_paths=[str(code)], ledger_path=str(ledger))
     assert not ok and "spent" in why and "unchanged" not in why, why
-    assert json.loads(ledger.read_text()) == [rec["nonce"]]
+    # RV3-6: the ledger is now {"nonces": [...], "verdicts": [...]}
+    assert json.loads(ledger.read_text()) == {"nonces": [rec["nonce"]], "verdicts": [rec["verdict_sha256"]]}
 
 
 # ---- T6: no code path opens the final ledger for writing; the F5-11 open flags ----------------------------------
@@ -255,7 +272,9 @@ def test_t6_final_ledger_never_opened_for_writing(tmp_path, monkeypatch):
     R.consume("f" * 32, str(ledger))
     monkeypatch.undo()
     assert ok, why
-    assert sorted(json.loads(ledger.read_text())) == sorted(["0" * 32, rec["nonce"], "f" * 32])
+    # RV3-6: a v2 list ledger is migrated to {"nonces": [...], "verdicts": [...]} on consume
+    assert json.loads(ledger.read_text()) == {
+        "nonces": sorted(["0" * 32, rec["nonce"], "f" * 32]), "verdicts": [rec["verdict_sha256"]]}
 
     final, lock = os.path.realpath(ledger), os.path.realpath(str(ledger) + ".lock")
     for kind, path, how in calls:
@@ -561,7 +580,8 @@ def test_t2b_eight_concurrent_consumes_all_recorded(tmp_path):
     nonces = [f"{i:032x}" for i in range(1, N + 1)]
     rcs = _spawn(tmp_path, [["CONSUME", n, str(ledger)] for n in nonces])
     assert rcs == [0] * N, rcs
-    assert sorted(json.loads(ledger.read_text())) == sorted(nonces)
+    # RV3-6: consume() writes the object-shaped ledger {"nonces": [...], "verdicts": []}
+    assert json.loads(ledger.read_text()) == {"nonces": sorted(nonces), "verdicts": []}
 
 
 # ---- T3b: symlink, FIFO and directory ledgers, each refused promptly (B8) ---------------------------------------

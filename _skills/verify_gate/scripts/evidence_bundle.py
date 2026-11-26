@@ -13,9 +13,14 @@ _INTENT_KEYS = ("intent", "answer_key", "self_assessment", "spec", "transcript",
                 "expected", "drafter_notes")
 
 
-def seal(*, artifact: str, evidence: list[dict]) -> dict:
+def seal(*, artifact: str, evidence: list[dict], package: dict) -> dict:
     """Build the bundle a judge is allowed to see: the artifact reference + evidence items,
-    with any intent-bearing key removed. Raises if an evidence item smuggles intent."""
+    with any intent-bearing key removed. Raises if an evidence item smuggles intent.
+    RV3-2: `package` (review_package.build's result) is required; the bundle names its fingerprint and its
+    read-only snapshot, and the judge is told to read only the snapshot and to repeat the fingerprint."""
+    sha, snap = (package or {}).get("package_sha256"), (package or {}).get("snapshot")
+    if not isinstance(sha, str) or len(sha) != 64 or not isinstance(snap, str) or not snap:
+        raise ValueError("seal needs a built review package (package_sha256 + snapshot)")
     clean: list[dict] = []
     for item in evidence:
         if not isinstance(item, dict):
@@ -24,7 +29,10 @@ def seal(*, artifact: str, evidence: list[dict]) -> dict:
         if bad:
             raise ValueError(f"evidence item carries intent key(s) {bad} — refusing to seal")
         clean.append(item)
-    return {"schema": "verify_gate.bundle.v1", "artifact": artifact, "evidence": clean}
+    return {"schema": "verify_gate.bundle.v2", "artifact": artifact, "evidence": clean,
+            "package": {"package_sha256": sha, "snapshot": snap},
+            "instruction": ("Read only the files in the snapshot folder. Return a verify_gate.verdict.v2 whose "
+                            "top-level package_sha256 repeats the package_sha256 above.")}
 
 
 def assert_no_intent(bundle: dict) -> None:

@@ -29,6 +29,10 @@ import core  # sibling module: the hooks pre-register it from approved bytes (GF
 
 SCHEMA_V1 = "verify_gate.receipt.v1"
 SCHEMA_V2 = "verify_gate.receipt.v2"
+SCHEMA_V3 = "verify_gate.receipt.v3"
+PACKAGE_SCHEMA = "verify_gate.package.v1"
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+_COPY = re.compile(r"package/[0-9]+")
 _MAX_READ = 64 * 1024 * 1024  # a verdict, attestation, ledger or changed file larger than this is refused
 DEFAULT_WINDOW_S = 3600  # a receipt older than this is stale even if the change-set matches
 FUTURE_SKEW_S = 300      # a receipt stamped further ahead than this is invalid (it would never go stale)
@@ -126,7 +130,10 @@ class Receipt:
     nonce: str
     verdict_ref: str = ""
     attestation_sha256: str = ""
-    schema: str = SCHEMA_V2
+    package_sha256: str = ""
+    package_ref: str = ""
+    ledger: str = ""
+    schema: str = SCHEMA_V3
 
     def as_dict(self) -> dict:
         return dataclasses.asdict(self)
@@ -142,6 +149,9 @@ def issuable(verdict: dict, attestation: dict) -> tuple[bool, str]:
     with no block finding (a refutation, even an un-anchored one, never earns a receipt) AND the attestation makes the
     verdict block-eligible (an un-anchored clean verdict earns none either)."""
     try:
+        # RV3-3/RV3-4: only a v2 verdict with a v2 attestation names a package, so only that pair can earn a receipt
+        if verdict.get("schema") != core.VERDICT_V2 or attestation.get("schema") != core.ATTESTATION_V2:
+            return False, "receipt-v3 needs a v2 verdict and a v2 attestation (re-run the review over a built package)"
         d = core.evaluate(verdict, attestation, require_blocking=False)
         if d.exit_code != core.ExitCode.PASS:
             return False, f"core.evaluate exit {d.exit_code} (not PASS)"
@@ -154,11 +164,103 @@ def issuable(verdict: dict, attestation: dict) -> tuple[bool, str]:
     return True, "issuable"
 
 
+def package_fingerprint(files: list) -> str:
+    """RV3-1: sha256 of the canonical JSON (sorted keys, no spaces) of a package's `files` list."""
+    return hashlib.sha256(json.dumps(files, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def read_package(package_path: str) -> tuple[list, str]:
+    """Re-read package.json ONCE (safe read) and derive its fingerprint from those bytes. Returns (files, package_sha256).
+    Raises UnsafeFile when it is absent, unsafe, or not a well-formed verify_gate.package.v1."""
+    raw = _safe_read_bytes(package_path)
+    if raw is None:
+        raise UnsafeFile(f"{package_path}: package missing")
+    data = _json_obj(raw)
+    files = data.get("files") if data is not None else None
+    if data is None or data.get("schema") != PACKAGE_SCHEMA or not isinstance(files, list):
+        raise UnsafeFile(f"{package_path}: not a {PACKAGE_SCHEMA} package")
+    seen = set()
+    for f in files:
+        ok = (isinstance(f, dict) and set(f) == {"path", "sha256", "size", "copy"}
+              and isinstance(f["path"], str) and os.path.isabs(f["path"]) and f["path"] not in seen
+              and isinstance(f["sha256"], str) and _HEX64.fullmatch(f["sha256"]) is not None
+              and isinstance(f["size"], int) and not isinstance(f["size"], bool) and f["size"] >= 0
+              and isinstance(f["copy"], str) and _COPY.fullmatch(f["copy"]) is not None)
+        if not ok:
+            raise UnsafeFile(f"{package_path}: malformed package entry")
+        seen.add(f["path"])
+    if [f["path"] for f in files] != sorted(seen):
+        raise UnsafeFile(f"{package_path}: package entries not sorted by path")
+    return files, package_fingerprint(files)
+
+
+def _package_checks(*, package_path: str, verdict: dict, attestation: dict, package_sha: str, package_ref: str,
+                    changed_paths: list[str]) -> float:
+    """RV3-5, on the bytes read now; raises UnsafeFile, returns the newest mtime among the package's files.
+    1. package.json re-read and fingerprinted: equal to the verdict's, the attestation's and the receipt's package_sha256;
+       the receipt's package_ref and the attestation's resolve to the same realpath.
+    2. the package's paths include every qualified changed path (a superset passes, a subset fails).
+    3. every package file's live sha256 and size equal its entry (G3-1 and G3-3 fail here by construction), and so do the
+       snapshot copy's (`<package dir>/package/<i>`, read with the same safe read; s329 F-6)."""
+    files, derived = read_package(package_path)
+    for who, sha in (("verdict", verdict.get("package_sha256")), ("attestation", attestation.get("package_sha256")),
+                     ("receipt", package_sha)):
+        if sha != derived:
+            raise UnsafeFile(f"package fingerprint mismatch: the {who}'s package_sha256 is not the package's")
+    a_ref = attestation.get("package_ref")
+    if not isinstance(a_ref, str) or not isinstance(package_ref, str) \
+            or os.path.realpath(package_ref) != os.path.realpath(a_ref):
+        raise UnsafeFile("package_ref differs from the attestation's package_ref")
+    listed = {f["path"] for f in files}
+    outside = sorted({qualify_path(p) for p in changed_paths} - listed)
+    if outside:
+        raise UnsafeFile(f"changed path(s) not in the reviewed package: {outside}")
+    newest = 0.0
+    pkg_dir = os.path.dirname(package_path)
+    for f in files:
+        # s329 F-6: the snapshot the judge was handed must still hold the entry's bytes (present, a regular single-link file,
+        # not a link, same sha256 and size); otherwise "handed a snapshot with matching bytes" would not be backed.
+        copy = os.path.join(pkg_dir, f["copy"])
+        try:
+            c = _safe_read_bytes(copy)
+        except UnsafeFile as e:
+            raise UnsafeFile(f"snapshot copy unsafe: {e}") from e
+        if c is None:
+            raise UnsafeFile(f"snapshot copy missing: {copy}")
+        if len(c) != f["size"] or hashlib.sha256(c).hexdigest() != f["sha256"]:
+            raise UnsafeFile(f"snapshot copy differs from its package entry: {copy}")
+        r = _safe_read(f["path"])
+        if r is None or len(r[0]) != f["size"] or hashlib.sha256(r[0]).hexdigest() != f["sha256"]:
+            raise UnsafeFile(f"package file changed since the package was built: {f['path']}")
+        newest = max(newest, r[1])
+    return newest
+
+
+def _issue_ledger(paths: list[str], ledger_path: str | None) -> str | None:
+    """The ledger write_receipt reads for the spent-verdict check: the given path, else the armed root's ledger, else None
+    (no armed root). `paths` is the union of the changed paths and the package's paths (s329 F-2: a changed subset with no
+    root no longer hides the package's armed root). An unreadable or ambiguous root state refuses (UnsafeFile). An explicit
+    `ledger_path` is taken as given (tests and CLIs that name the project ledger); the root rule is then not consulted."""
+    if ledger_path is not None:
+        return ledger_path
+    root, why = project_root(sorted({qualify_path(p) for p in paths}))
+    if root is not None:
+        return os.path.join(str(root), ".verify", "_consumed_nonces.json")
+    if why == "no project root":
+        return None
+    raise UnsafeFile(f"ledger not resolvable: {why}")
+
+
 def write_receipt(*, changed_paths: list[str], verdict_path: str, gate_exit: int,
-                  attestation_ref: str) -> Receipt:
-    """Issue a v2 receipt. Both artifact refs are stored absolute and link-free (os.path.realpath); the verdict and the
-    attestation are each read once, evaluated with `issuable` and hashed from those same bytes. Raises UnsafeFile when an
-    artifact cannot be read, is missing, or is not issuable."""
+                  attestation_ref: str, package_path: str, ledger_path: str | None = None) -> Receipt:
+    """Issue a v3 receipt. Both artifact refs are stored absolute and link-free (os.path.realpath); the verdict and the
+    attestation are each read once, evaluated with `issuable` and hashed from those same bytes. `package_path` must resolve to
+    the attestation's package_ref, and RV3-5's three checks run on the bytes read now. RV3-6 / D-4: a verdict already spent
+    in the ledger (`ledger_path`, else the armed root's; with neither, the check is skipped and the receipt says
+    ledger "none") is refused. Every refusal raises UnsafeFile, the one contract callers catch."""
+    if not changed_paths:
+        # s329 F-2: a receipt names the change it covers; an empty list would skip every changed-path check
+        raise UnsafeFile("receipt over no changed path: name the changed files (--changed)")
     v_ref, a_ref = os.path.realpath(verdict_path), os.path.realpath(attestation_ref)
     vb, ab = _safe_read_bytes(v_ref), _safe_read_bytes(a_ref)
     for ref, b in ((v_ref, vb), (a_ref, ab)):
@@ -171,15 +273,33 @@ def write_receipt(*, changed_paths: list[str], verdict_path: str, gate_exit: int
     ok, why = issuable(vobj, aobj)
     if not ok:
         raise UnsafeFile(f"not issuable from the bytes read for hashing: {why}")
+    p_ref = os.path.realpath(package_path)
+    if not isinstance(aobj.get("package_ref"), str) or p_ref != os.path.realpath(aobj["package_ref"]):
+        raise UnsafeFile("package_path is not the attestation's package_ref")
+    files, p_sha = read_package(p_ref)
+    _package_checks(package_path=p_ref, verdict=vobj, attestation=aobj, package_sha=p_sha, package_ref=p_ref,
+                    changed_paths=changed_paths)
+    v_sha = hashlib.sha256(vb).hexdigest()
+    ledger = _issue_ledger(list(changed_paths) + [f["path"] for f in files], ledger_path)
+    if ledger is not None:
+        try:
+            _nonces, spent = _load_ledger(ledger)
+        except LedgerError as e:
+            raise UnsafeFile(str(e)) from e
+        if v_sha in spent:
+            raise UnsafeFile("verdict already spent: one verdict earns one receipt (re-run the review)")
     return Receipt(
-        changeset_sha256=changeset_sha256(changed_paths),
-        verdict_sha256=hashlib.sha256(vb).hexdigest(),
+        changeset_sha256=changeset_sha256([f["path"] for f in files]),
+        verdict_sha256=v_sha,
         gate_exit=gate_exit,
         ts=time.time(),
         attestation_ref=a_ref,
         nonce=uuid.uuid4().hex,
         verdict_ref=v_ref,
         attestation_sha256=hashlib.sha256(ab).hexdigest(),
+        package_sha256=p_sha,
+        package_ref=p_ref,
+        ledger=ledger if ledger is not None else "none",
     )
 
 
@@ -350,20 +470,30 @@ def _nonce_ok(nonce) -> bool:
     return isinstance(nonce, str) and _NONCE.fullmatch(nonce) is not None
 
 
-def _load_ledger(ledger_path: str) -> set[str]:
-    """Absent = empty. Present but unreadable, not a regular file, hard-linked (st_nlink != 1), reached through a
-    link, not a JSON list, or holding anything but nonces of the uuid4().hex form => LedgerError (fail closed: it used to
-    read as empty, which revived every spent nonce and, on the next consume, erased the history). One safe read (R-2)."""
+def _load_ledger(ledger_path: str) -> tuple[set[str], set[str]]:
+    """Returns (spent nonces, spent verdict sha256s). Absent = both empty. RV3-6: the ledger is the object
+    {"nonces": [...], "verdicts": [...]} with exactly those two keys, every nonce of the uuid4().hex form and every verdict
+    64 lowercase hex; a v2 list of nonces is read as {"nonces": <list>, "verdicts": []} (rewritten at the next consume).
+    Present but unreadable, not a regular file, hard-linked (st_nlink != 1), reached through a link, or any other shape
+    => LedgerError (fail closed: it used to read as empty, which revived every spent nonce). One safe read (R-2)."""
     try:
         raw = _safe_read_bytes(ledger_path)
         if raw is None:
-            return set()
+            return set(), set()
         data = json.loads(raw.decode("utf-8"))
     except (OSError, UnsafeFile, ValueError, RecursionError, MemoryError) as e:
         raise LedgerError(f"nonce ledger unreadable: {ledger_path}") from e
-    if not isinstance(data, list) or not all(_nonce_ok(n) for n in data):
+    if isinstance(data, list):
+        nonces, verdicts = data, []
+    elif isinstance(data, dict) and set(data) == {"nonces", "verdicts"} \
+            and isinstance(data["nonces"], list) and isinstance(data["verdicts"], list):
+        nonces, verdicts = data["nonces"], data["verdicts"]
+    else:
         raise LedgerError(f"nonce ledger unreadable: {ledger_path}")
-    return set(data)
+    if not all(_nonce_ok(n) for n in nonces) \
+            or not all(isinstance(v, str) and _HEX64.fullmatch(v) is not None for v in verdicts):
+        raise LedgerError(f"nonce ledger unreadable: {ledger_path}")
+    return set(nonces), set(verdicts)
 
 
 def _folder(ledger_path: str) -> str:
@@ -438,7 +568,7 @@ def _sync(fd: int) -> None:
     os.fsync(fd)
 
 
-def _write_ledger(ledger_path: str, used: set[str], lock_fd: int) -> None:
+def _write_ledger(ledger_path: str, used: set[str], lock_fd: int, verdicts: set[str] = frozenset()) -> None:
     """Write a temp file in the same folder, fsync, os.replace (the commit point), fsync the folder.
     Before the commit point a failure leaves the ledger unchanged and removes the temp; the final
     ledger path is never opened for writing. Just before the commit point the lock file at its path must still
@@ -457,7 +587,7 @@ def _write_ledger(ledger_path: str, used: set[str], lock_fd: int) -> None:
         raise LedgerError(f"nonce ledger write failed, ledger unchanged: {e}") from e
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(sorted(used), fh)
+            json.dump({"nonces": sorted(used), "verdicts": sorted(verdicts)}, fh)
             fh.flush()
             _sync(fh.fileno())
         held, at_path = os.fstat(lock_fd), os.stat(ledger_path + ".lock")
@@ -486,9 +616,9 @@ def consume(nonce: str, ledger_path: str) -> None:
     if not _nonce_ok(nonce):
         raise LedgerError("nonce missing or malformed")
     with _locked(ledger_path) as lock_fd:
-        used = _load_ledger(ledger_path)
+        used, verdicts = _load_ledger(ledger_path)
         used.add(nonce)
-        _write_ledger(ledger_path, used, lock_fd)
+        _write_ledger(ledger_path, used, lock_fd, verdicts)
 
 
 def _json_obj(raw: bytes):
@@ -519,12 +649,13 @@ def _hash_changed(changed_paths: list[str]) -> tuple[str, float]:
 
 
 def _check(receipt: dict, *, changed_paths: list[str], ledger_path: str,
-           window_s: int, now: float | None) -> tuple[bool, str, set[str] | None]:
+           window_s: int, now: float | None) -> tuple[bool, str, tuple[set[str], set[str]] | None]:
     """Order (R-2): schema and time window (no file read); the two artifacts; the change-set; the ledger."""
     now = time.time() if now is None else now
-    if isinstance(receipt, dict) and receipt.get("schema") == SCHEMA_V1:
-        return False, "re-issue under v2 (a v1 receipt is no longer accepted)", None
-    if not isinstance(receipt, dict) or receipt.get("schema") != SCHEMA_V2:
+    if isinstance(receipt, dict) and receipt.get("schema") in (SCHEMA_V1, SCHEMA_V2):
+        # D-1: invalid at once, no grace window
+        return False, f"re-issue under v3 (a {receipt.get('schema')} receipt is no longer accepted)", None
+    if not isinstance(receipt, dict) or receipt.get("schema") != SCHEMA_V3:
         return False, "bad receipt schema", None
     if receipt.get("gate_exit") not in (0,):
         return False, f"receipt records a non-pass gate_exit={receipt.get('gate_exit')}", None
@@ -567,23 +698,29 @@ def _check(receipt: dict, *, changed_paths: list[str], ledger_path: str,
     ok, why = issuable(parsed["verdict_ref"], parsed["attestation_ref"])
     if not ok:
         return False, f"decision re-derived from the artifacts refuses: {why}", None
+    # RV3-5 / R-01: v2's change-set equality is replaced by the three package checks (a wider honest receipt passes).
+    p_ref = receipt.get("package_ref")
+    if not isinstance(p_ref, str) or not os.path.isabs(p_ref):
+        return False, "receipt package_ref missing or not absolute", None
     try:
-        cur, newest = _hash_changed(changed_paths)
+        newest = _package_checks(package_path=p_ref, verdict=parsed["verdict_ref"],
+                                 attestation=parsed["attestation_ref"], package_sha=receipt.get("package_sha256"),
+                                 package_ref=p_ref, changed_paths=changed_paths)
     except UnsafeFile as e:
-        return False, f"changed path unsafe: {e}", None
+        return False, f"package check refuses: {e}", None
     except OSError as e:
-        return False, f"changed path unreadable: {e}", None
-    if receipt.get("changeset_sha256") != cur:
-        return False, "change-set hash mismatch (work changed since the receipt)", None
+        return False, f"package unreadable: {e}", None
     if ts < newest:
         return False, "receipt predates the newest changed file (edited after verification)", None
     try:
-        used = _load_ledger(ledger_path)
+        used, verdicts = _load_ledger(ledger_path)
     except LedgerError:
         return False, f"nonce ledger unreadable: {ledger_path}", None
     if receipt["nonce"] in used:
         return False, "receipt already consumed (replay)", None
-    return True, "receipt valid for the current change-set", used
+    if receipt.get("verdict_sha256") in verdicts:
+        return False, "verdict already spent: one verdict earns one receipt", None
+    return True, "receipt valid for the current change-set", (used, verdicts)
 
 
 def validate_receipt(receipt: dict, *, changed_paths: list[str], ledger_path: str,
@@ -605,12 +742,14 @@ def validate_and_consume(receipt: dict, *, changed_paths: list[str], ledger_path
     a failed folder fsync returns a distinct reason with the nonce spent."""
     try:
         with _locked(ledger_path) as lock_fd:
-            ok, why, used = _check(receipt, changed_paths=changed_paths, ledger_path=ledger_path,
-                                   window_s=window_s, now=now)
+            ok, why, state = _check(receipt, changed_paths=changed_paths, ledger_path=ledger_path,
+                                    window_s=window_s, now=now)
             if not ok:
                 return False, why
+            used, verdicts = state
             used.add(receipt["nonce"])
-            _write_ledger(ledger_path, used, lock_fd)
+            verdicts.add(receipt["verdict_sha256"])     # RV3-6: the verdict is spent with the nonce, under the same lock
+            _write_ledger(ledger_path, used, lock_fd, verdicts)
             return True, why
     except LedgerError as e:
         return False, str(e)

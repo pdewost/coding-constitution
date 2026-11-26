@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "scripts"))
 
 import core            # noqa: E402
 import receipt as R    # noqa: E402
+import review_package  # noqa: E402
 import review_runner   # noqa: E402
 import evidence_bundle # noqa: E402
 import verdict_form    # noqa: E402
@@ -129,26 +130,37 @@ def test_human_prose_only_is_demoted_no_block():
 # ---- receipt: change-set bound, single-use, fresh --------------------------
 def test_receipt_roundtrip_and_changeset_binding(tmp_path):
     f = tmp_path / "code.py"; f.write_text("x = 1\n")
-    vfile = tmp_path / "verdict.json"; vfile.write_text(json.dumps(mk_verdict()))
-    afile = tmp_path / "att.json"; afile.write_text(json.dumps(mk_att()))
+    pkg = review_package.build([str(f)], str(tmp_path / "pkg"))
+    vfile = tmp_path / "verdict.json"
+    vfile.write_text(json.dumps({**mk_verdict(), "schema": "verify_gate.verdict.v2",
+                                 "package_sha256": pkg["package_sha256"]}))
+    afile = tmp_path / "att.json"
+    afile.write_text(json.dumps({**mk_att(), "schema": "verify_gate.attestation.v2",
+                                 "package_sha256": pkg["package_sha256"], "package_ref": pkg["package_path"]}))
     ledger = str(tmp_path / "ledger.json")
     rec = R.write_receipt(changed_paths=[str(f)], verdict_path=str(vfile), gate_exit=0,
-                          attestation_ref=str(afile))
+                          attestation_ref=str(afile), package_path=pkg["package_path"], ledger_path=ledger)
     ok, why = R.validate_receipt(rec.as_dict(), changed_paths=[str(f)], ledger_path=ledger)
     assert ok, why
     # edit the file => change-set hash flips => receipt no longer valid
     time.sleep(0.01); f.write_text("x = 2\n")
     ok2, why2 = R.validate_receipt(rec.as_dict(), changed_paths=[str(f)], ledger_path=ledger)
-    assert not ok2 and "mismatch" in why2
+    # RV3-5: _package_checks replaces v2's changeset_sha256 equality check with live per-file sha256 verification
+    assert not ok2 and "package file changed" in why2
 
 
 def test_receipt_single_use_replay(tmp_path):
     f = tmp_path / "code.py"; f.write_text("x = 1\n")
-    vfile = tmp_path / "verdict.json"; vfile.write_text(json.dumps(mk_verdict()))
-    afile = tmp_path / "att.json"; afile.write_text(json.dumps(mk_att()))
+    pkg = review_package.build([str(f)], str(tmp_path / "pkg"))
+    vfile = tmp_path / "verdict.json"
+    vfile.write_text(json.dumps({**mk_verdict(), "schema": "verify_gate.verdict.v2",
+                                 "package_sha256": pkg["package_sha256"]}))
+    afile = tmp_path / "att.json"
+    afile.write_text(json.dumps({**mk_att(), "schema": "verify_gate.attestation.v2",
+                                 "package_sha256": pkg["package_sha256"], "package_ref": pkg["package_path"]}))
     ledger = str(tmp_path / "ledger.json")
     rec = R.write_receipt(changed_paths=[str(f)], verdict_path=str(vfile), gate_exit=0,
-                          attestation_ref=str(afile))
+                          attestation_ref=str(afile), package_path=pkg["package_path"], ledger_path=ledger)
     ok, _ = R.validate_receipt(rec.as_dict(), changed_paths=[str(f)], ledger_path=ledger)
     assert ok
     R.consume(rec.nonce, ledger)
@@ -167,7 +179,9 @@ def test_receipt_stale(tmp_path):
 
 # ---- orchestrator (review_runner) ------------------------------------------
 def test_runner_attests_out_of_band(tmp_path):
-    bundle = evidence_bundle.seal(artifact="art", evidence=[{"type": "file", "ref": "x:1"}])
+    # RV3-2: evidence_bundle.seal requires a package dict with package_sha256 + snapshot
+    bundle = evidence_bundle.seal(artifact="art", evidence=[{"type": "file", "ref": "x:1"}],
+                                  package={"package_sha256": "0" * 64, "snapshot": str(tmp_path)})
     out = review_runner.run_review(
         bundle=bundle, backend="harness_subagent",
         judge_fn=lambda b: mk_verdict(refuted=True, finding=hi_finding()),
@@ -182,7 +196,9 @@ def test_runner_attests_out_of_band(tmp_path):
 
 def test_runner_self_invoked_is_advisory(tmp_path):
     # The bare local case: the same agent is orchestrator AND judge => attestor == producer.
-    bundle = evidence_bundle.seal(artifact="art", evidence=[])
+    # RV3-2: evidence_bundle.seal requires a package dict with package_sha256 + snapshot
+    bundle = evidence_bundle.seal(artifact="art", evidence=[],
+                                  package={"package_sha256": "0" * 64, "snapshot": str(tmp_path)})
     out = review_runner.run_review(
         bundle=bundle, backend="harness_subagent",
         judge_fn=lambda b: mk_verdict(producer="agent", refuted=True, finding=hi_finding()),
@@ -203,7 +219,9 @@ def test_runner_judge_unreachable(tmp_path):
 # ---- evidence bundle seals intent ------------------------------------------
 def test_seal_rejects_intent():
     with pytest.raises(ValueError):
-        evidence_bundle.seal(artifact="a", evidence=[{"type": "file", "answer_key": "secret"}])
+        # RV3-2: evidence_bundle.seal requires a package dict with package_sha256 + snapshot
+        evidence_bundle.seal(artifact="a", evidence=[{"type": "file", "answer_key": "secret"}],
+                             package={"package_sha256": "0" * 64, "snapshot": "/tmp"})
 
 
 # ---- CLI: override downgrades a block, audited -----------------------------

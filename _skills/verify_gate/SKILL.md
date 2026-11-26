@@ -1,9 +1,9 @@
 ---
 name: verify_gate
-version: 0.4.0
+version: 0.5.0
 kind: library
 status: active
-description: Harness- & coder-neutral VERIFY-GATE — validates an independently-produced, externally-attested verdict (LLM, subagent, or human) and blocks only when independence is anchored OUTSIDE the producing agent; v2 receipts that record how they were earned (re-derived from the verdict and the attestation at every validation), bound to the change-set, spent once by the CLI under a locked, fail-closed, per-project ledger.
+description: Harness- & coder-neutral VERIFY-GATE — validates an independently-produced, externally-attested verdict (LLM, subagent, or human) and blocks only when independence is anchored OUTSIDE the producing agent; v3 receipts bound to a fingerprinted review package (a read-only snapshot the reviewer is handed, whose fingerprint the verdict repeats), re-derived from the verdict and the attestation at every validation, one receipt per verdict, spent once by the CLI under a locked, fail-closed, per-project ledger.
 ---
 
 DISPATCH-CLASS: adversarial@high
@@ -39,44 +39,65 @@ doesn't help.
   · `3` unanchored (blocking required but advisory-only) · `4` judge-unreachable · `5` tamper
   (self-asserted attestation inside the verdict) · `6` receipt invalid.
 - `verify_gate.py` — the CLI every adapter shells:
-  `verify_gate.py --verdict V --attestation A [--require-blocking] [--changed f… --write-receipt R] [--override "<reason>"] [--judge-unreachable]`, or `verify_gate.py --changed f… --receipt R` (validate and spend a receipt). The receipt mode serves **armed roots** only (a project holding `NEOCORTEX/` and `.verify/armed`): the ledger is always `<project>/.verify/_consumed_nonces.json`, derived from the changed files by `receipt.project_root`, and the CLI takes no ledger option. Exit 6 with a `decision` of "no project root", "ambiguous project root" or "armed state unreadable" when no single armed root can be named. A relative `--changed` path is joined to the cwd with a plain separator join (no folding of `./` or `..`); issuance refuses a path validation would refuse (a link in any component, a FIFO, a folder, a hard-linked file, a file over 64 MiB or one that changes while it is read): exit 6, no receipt.
+  `verify_gate.py --verdict V --attestation A [--require-blocking] [--changed f… --write-receipt R --package D/package.json] [--override "<reason>"] [--judge-unreachable]` (`--write-receipt` without `--package`, or without a `--changed` file, writes nothing, exit 6; on a PASS that is not issuable, such as an unanchored or v1 review, no receipt is written and the exit is the gate's decision), or `verify_gate.py --changed f… --receipt R` (validate and spend a receipt). The receipt mode serves **armed roots** only (a project holding `NEOCORTEX/` and `.verify/armed`): the ledger is always `<project>/.verify/_consumed_nonces.json`, derived from the changed files by `receipt.project_root`, and the CLI takes no ledger option. Exit 6 with a `decision` of "no project root", "ambiguous project root" or "armed state unreadable" when no single armed root can be named. A relative `--changed` path is joined to the cwd with a plain separator join (no folding of `./` or `..`); issuance refuses a path validation would refuse (a link in any component, a FIFO, a folder, a hard-linked file, a file over 64 MiB or one that changes while it is read): exit 6, no receipt.
 - `review_runner.run_review(...)` — the orchestrator: seals the bundle, spawns the judge,
   **writes the attestation out-of-band**. `harness_subagent | stateless_llm | human` backends;
   `judge_fn` injected (the real model call / harness spawn / form).
-- `receipt.py` — `write_receipt` / `validate_receipt` / `validate_and_consume` / `consume` / `project_root`: a v2 VERIFY-RECEIPT
-  bound to a **change-set hash** and **time-fresh** (a `ts` over 300 s ahead is invalid); it records `verdict_ref`,
-  `verdict_sha256`, `attestation_ref` and `attestation_sha256`, and validation re-derives the decision from those two files
-  (hashes equal, `core.evaluate` PASS, no block finding, block-eligible). **Single-use: the CLI
+- `review_package.build(changed_paths, outdir)` — the **review package** (receipt-v3): read-only (0444) copies of the change-set
+  in `outdir/package/<i>` and `outdir/package.json` (`verify_gate.package.v1`). Its fingerprint `package_sha256` is the sha256 of
+  the canonical JSON of the `files` list; it is never stored, every reader derives it (`receipt.read_package`).
+- `receipt.py` — `write_receipt` / `validate_receipt` / `validate_and_consume` / `consume` / `project_root`: a v3 VERIFY-RECEIPT
+  bound to a **review package** and **time-fresh** (a `ts` over 300 s ahead is invalid); it records `verdict_ref`,
+  `verdict_sha256`, `attestation_ref`, `attestation_sha256`, `package_sha256` and `package_ref`, and validation re-derives the
+  decision from those two files (hashes equal, `core.evaluate` PASS, no block finding, block-eligible). Three package checks run
+  at issuance and at every validation: the package's fingerprint equals the verdict's, the attestation's and the receipt's (and
+  `package_ref` resolves to the attestation's); the package's paths include every changed path (a superset passes, a subset
+  fails); every package file still hashes to its entry. Issuance needs a `verify_gate.verdict.v2` and a
+  `verify_gate.attestation.v2`; a verdict whose `package_sha256` differs from the attestation's is tamper (exit 5). **One verdict
+  earns one receipt:** the ledger records spent verdicts, and a spent verdict is refused at issuance and at validation. **Single-use: the CLI
   spends it through `verify_gate.py --receipt`; the hooks check without spending, so inside its window a receipt
   satisfies every Stop over the same unchanged change-set until it is spent once, by the CLI included: the CLI spends
   into `<project>/.verify/_consumed_nonces.json`, the ledger the Stop gate reads, and the next Stop refuses it.** `validate_and_consume` validates and spends under an exclusive `fcntl.flock` on a sidecar
   `<ledger>.lock` and writes the ledger atomically (temp file, `fsync`, `os.replace`, folder `fsync`), so of
-  concurrent runs on one receipt at most one passes. The ledger fails closed: absent = empty; present but
+  concurrent runs on one receipt at most one passes. The ledger is `{"nonces": [...], "verdicts": [...]}` (a 0.4.0 list of nonces
+  is read as nonces and rewritten in the object shape at its next consume). It fails closed: absent = empty; present but
   unreadable or malformed = every receipt invalid, never rewritten (move it aside to restore service, which
   also reopens every nonce it held). A receipt whose nonce is missing or not of the `uuid4().hex` form is
   invalid. Platform: `flock` is advisory and unreliable on some network filesystems; without `fcntl` (not
   POSIX) `validate_and_consume` refuses. Edit-after and crash re-block; resume and fresh re-block once the
   receipt is spent or stale.
-- `evidence_bundle.seal(...)` — strips intent/answer-key from what a judge may see.
+- `evidence_bundle.seal(*, artifact, evidence, package)` — strips intent/answer-key from what a judge may see; `package` (the
+  review package's `package_sha256` and `snapshot`) is required, and the bundle tells the judge to read only the snapshot and
+  repeat the fingerprint.
 - `verdict_form.build_verdict(...)` / `--out` CLI — the **human** path; a human verdict blocks
   only via a substantiated finding (`evidence.ref` file:line **+** `evidence.literal` quote).
-- `produce_review.produce(...)` / CLI — **the PRODUCER** (runs a review end to end: seal → judge →
-  out-of-band attest → gate → receipt). `judges.stateless_llm_judge(...)` — the stateless
+- `produce_review.produce(...)` / CLI — **the PRODUCER** (runs a review end to end: package → seal → judge →
+  out-of-band attest → gate → receipt). `produce_review.py prepare` / `finish` — the two-step hand-over for an agent-spawned
+  reviewer (see "Running a review"). `judges.stateless_llm_judge(...)` — the stateless
   fresh-context judge (pluggable `call_fn`; the default needs a local_llm-style client — not self-contained, inject your own; strips any
   self-attestation a model emits).
 
 ## Running a review
 
-**Primary — harness-spawned subagent (mechanical, agent-driven).** The agent spawns a fresh-context
-reviewer subagent (Agent/Task tool or a workflow) over the sealed evidence, then finalizes:
+**Primary — harness-spawned subagent (mechanical, agent-driven), in two steps.**
 
-```python
-out = produce_review.produce(
-    artifact=..., evidence=[...], drafter_id="<author>", producer_id="<subagent-id>",
-    backend="harness_subagent", orchestrator_id="<the spawning agent>", anchor_id="<spawn id>",
-    agent_verdict=<the subagent's verdict dict>, changed_paths=[...], outdir=...)
+```bash
+produce_review.py prepare --changed f1 f2 --outdir DIR     # builds DIR/package/ + DIR/package.json; prints the reviewer
+                                                           # brief and a JOURNAL line listing the package's paths
+# spawn a fresh-context reviewer subagent with the brief: it reads only DIR/package/ and returns a
+# verify_gate.verdict.v2 that repeats the package_sha256; save it as V.json
+produce_review.py finish --verdict-json V.json --outdir DIR --orchestrator-id <the spawning agent> --anchor-id <spawn id>
 ```
-Because the orchestrator (the spawning agent) attests and `attestor != producer`, the verdict can BLOCK.
+`finish` keeps the verdict's bytes as returned, attests it (stamping the package), evaluates it and, on an issuable PASS, writes
+`DIR/receipt.json` over the package's paths. Because the orchestrator attests and `attestor != producer`, the verdict can BLOCK.
+`produce_review.produce(..., agent_verdict=...)` still runs end to end, but its package is built inside the call, so a verdict
+prepared beforehand cannot repeat its fingerprint and earns no receipt; use `prepare` / `finish`.
+
+**Rule for agents — a receipt describes the whole change-set (RV3-10).** Issue the receipt over every file you changed under the
+armed root this session, whether or not the Stop gate lists it. A receipt over your full change-set satisfies a gate that lists
+fewer files. Never narrow a receipt to match a smaller list. If the gate blocks on a path your receipt lacks, review that file and
+re-issue over the wider set, or stop and report BLOCKED with both lists. (Example: under 0.4.0 the typeface project's 4-file
+receipt failed against the gate's 1-file list, which pushed the session to narrow it.)
 
 **Fallback — stateless model (CI / hooks; pass your own `call_fn`):**
 ```bash
@@ -92,9 +113,9 @@ produce_review.py --artifact X --evidence-json E.json --backend stateless_llm \
   is the in-session adapter + a `--no-verify`-bypassable `pre-commit` (defence-in-depth).
 - Human independence is **by identity** (an external producer id), not context-denial.
 - Receipt forgery is possible on a local box — it raises the bar from "echo a magic string"
-  to "produce a real attested verdict + matching-change-set receipt," not a crypto guarantee. Honest limits of a v2 receipt:
+  to "produce a real attested verdict + matching-change-set receipt," not a crypto guarantee. Honest limits of a receipt:
   on a local box a determined agent can still forge the whole evidence set (attestation, verdict, receipt), and single use is per project root: moving the ledger aside reopens every spent nonce. R-1 to R-4 close the accidental paths named above; they do not raise the cryptographic floor.
-  A receipt does not prove what was reviewed: a genuine clean verdict and attestation, whatever they reviewed and however old, can be bound to any later change-set, any number of times, and an edit made while a review runs is not detected (planned: receipt-v3). Validation reads the changed files one after another, so an edit made during validation can pass. The Stop hook sees edits as the transcript spells them: a write under a scratch or temp exemption (an alias or a `..` escape into the project included), a `cd` inside a command, an unexpanded variable, or a link changed before the turn ends can escape the armed check. The hooks' import guard does not authenticate modules already in sys.modules; it refuses only an unverified module cached under a scripts-file name whose file lies in the scripts folder. The CLIs have no import guard.
+  A receipt proves the reviewer was handed a snapshot whose files cover the change-set with matching bytes, and one verdict earns one receipt per project ledger once the CLI spends it; it does not prove the reviewer read every file of the snapshot. Validation reads the changed files one after another, so an edit made during validation can pass. The Stop hook sees edits as the transcript spells them: a write under a scratch or temp exemption (an alias or a `..` escape into the project included), a `cd` inside a command other than a plain `&&` chain, an unexpanded variable, a file written by an interpreter (inline code or a script), or a link changed before the turn ends can escape the armed check. The hooks' import guard does not authenticate modules already in sys.modules; it refuses only an unverified module cached under a scripts-file name whose file lies in the scripts folder. The CLIs have no import guard.
 
 ## Status / consumers
 
@@ -104,10 +125,40 @@ runs reviews — harness-subagent primary + stateless-llm fallback; the fallback
 `--backend stateless_llm`, end at exit 4 `judge_unreachable` with a reason naming `call_fn`). `POLICY_CORE += VERIFY-GATE` is
 landed (live, v1.1). **Wired as the `verify_advisory` Claude Code adapter hook (advisory-mode), deployable via `install_adapters`; blocking is per-project opt-in (`.verify/armed` + a wired reviewer + a proven change-set receipt).**
 Next (founder-gated): per-harness adapters + the advisory fleet push; the change-set receipt in
-`CLOSEOUT-GATE`. Tests: `python3.12 -m pytest _skills/verify_gate/tests/ -q` (**69 cases**).
+`CLOSEOUT-GATE`. Tests: `python3.12 -m pytest _skills/verify_gate/tests/ -q` (**235 cases** at 0.5.0).
 
 ## Changelog
 
+- **0.5.0** (2026-11-14; `governance/NEOCORTEX/PLAN_verify_gate_receipt_v3_2026-11-13.md` (private, not shipped) v0.4, RV3-1 to RV3-10; consumers:
+  `governance/NEOCORTEX/NOTE_verify_gate_0.5.0_consumers_2026-11-14.md` (private, not shipped)). Closes three gaps: a receipt bound to any later
+  change-set (G3-1), one verdict earning any number of receipts (G3-2), an edit made during the review going undetected (G3-3).
+  New: `review_package.py` (`build`, `read`, `fingerprint`); `receipt.read_package`, `receipt.package_fingerprint`; schemas
+  `verify_gate.package.v1`, `verify_gate.verdict.v2` and `verify_gate.attestation.v2` (each adds `package_sha256`; the
+  attestation adds `package_ref`), `verify_gate.receipt.v3` (adds `package_sha256`, `package_ref`, `ledger`).
+  Signatures that change: `evidence_bundle.seal(package=)` is required; `verify_gate.py --write-receipt` needs `--package`;
+  `produce_review.py` gains `prepare` / `finish`; `produce_review.produce(agent_verdict=)` no longer issues without a package
+  whose fingerprint the verdict repeats; `receipt.write_receipt` gains `package_path` (required) and `ledger_path`;
+  `review_runner.attest` is split out of `run_review`; `judges` asks for a v2 verdict and marks a reply v2 only when it repeats
+  a `package_sha256` (a non-empty string) or declares v2 (a declared v2 is never relabelled v1: core then refuses its missing or
+  malformed sha). `produce_review.produce` reports an unsafe changed path, a reused `outdir` or any other `outdir` error as a
+  refusal (exit 6) before any judge runs, and, on a PASS, a receipt that `write_receipt` refuses or that cannot be written as
+  exit 6; a PASS that cannot earn a receipt (unanchored, a v1 verdict) keeps exit 0, as `verify_gate.py --write-receipt` does,
+  with "no receipt written: <reason>" in `reasons` (founder card 2026-11-26, "Keep exit 0, fix wording"); with no changed path
+  it is a gate-only run. `finish` exists only to issue a receipt, so there every PASS without one is exit 6; it reports an
+  unsafe or unreadable package, an unsafe verdict file and a failed receipt write as exit 6 (a verdict that is absent or not a
+  JSON object stays exit 5, tamper, as in `verify_gate.py`), and reads a verdict through symlinked parent folders, resolved as
+  the kernel does (`link/..` is the link target's parent), while a verdict file that is itself a link stays refused. `finish`
+  writes its `verdict.json` copy, and both write `receipt.json`, without following a link (s520 M1-M3, s519 F1-F3);
+  `produce`'s `verdict.json` is written by `review_runner.run_review` into the `outdir` it has just created.
+  `write_receipt` refuses an empty change-set ("receipt over no changed path") and resolves its default ledger over the
+  changed paths and the package's paths together; the package checks also verify each snapshot copy (`package/<i>`: present,
+  a regular single-link file, sha256 and size equal to its entry) and each live file's size (s329 fixes F-1 to F-4, F-6).
+  Every shape that turns invalid: a **v2 receipt** (and a v1) — "re-issue under v3"; for issuance, a **v1 verdict** or a **v1
+  attestation**; a v2 verdict whose `package_sha256` differs from the attestation's (tamper, exit 5); a package whose
+  fingerprint, `package_ref`, paths (a subset of the change-set) or file bytes no longer match; a verdict already spent
+  ("verdict already spent: one verdict earns one receipt"); the **list-shaped ledger** after its first v3 consume (it is
+  rewritten as `{"nonces", "verdicts"}`); an object ledger with any other key or a malformed entry. v2's change-set equality is
+  removed: a receipt whose package is wider than the gate's change-set now passes (RV3-10).
 - **0.4.0** (2026-11-10; `governance/NEOCORTEX/PLAN_verify_gate_receipt_v2_2026-11-02.md` (private, not shipped) v0.7, R-1 to R-5; consumers:
   `governance/NEOCORTEX/NOTE_verify_gate_0.4.0_consumers_<date>.md` (private, not shipped)). Schema `verify_gate.receipt.v2` adds `verdict_ref` and
   `attestation_sha256` (refs absolute, `realpath`-normalised at issuance); API: `receipt.project_root`, `receipt.qualify_path`,

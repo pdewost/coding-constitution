@@ -218,7 +218,8 @@ check "verify: stop_hook_active is silent"        silent "$(vlog VERIFY-)"
 stop false
 check "verify: code edit, no receipt: PENDING"    fire   "$(vlog VERIFY-PENDING)"
 check "verify: code edit, no receipt: not PROVEN" silent "$(vlog VERIFY-PROVEN)"
-mkdir -p "$V/_skills/verify_gate/scripts" "$V/.verify"; printf '{}\n' > "$V/.verify/receipt.json"
+mkdir -p "$V/_skills/verify_gate/scripts" "$V/.verify"   # receipt-v3 (RV3-5): the stub receipt carries the package fields
+printf '{"schema":"verify_gate.receipt.v3","package_sha256":"%s","package_ref":"%s"}\n' "$(printf '0%.0s' {1..64})" "$V/.verify/package.json" > "$V/.verify/receipt.json"
 printf 'import pathlib\ndef project_root(changed_paths):\n    return pathlib.Path(%s), "ok"\ndef validate_receipt(rec, changed_paths, ledger_path):\n    return True, ""\n' "'$V'" > "$V/_skills/verify_gate/scripts/receipt.py"   # receipt-v2 R-3: the advisory asks project_root first
 # receipt-v2 GF-1: the advisory runs the scripts only from approved bytes, through the fixture's own hook_support.py and
 # approved list, so the fixture approves its stub (inside the fixture only; the live list is never written).

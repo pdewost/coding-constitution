@@ -112,7 +112,10 @@ def recent_error_count(hours: int = 24, root: Path = ROOT) -> int:
 _EXCLUDED_DIRS = {"__pycache__", ".pytest_cache"}
 _TREES = (".claude/hooks", "governance/adapters/claude-code", "_skills/verify_gate/scripts")
 _SINGLE_FILES = (".claude/settings.json", ".claude/settings.local.json",
-                 "governance/machine_config.yaml", "governance/routing_policy.yaml")
+                 "governance/machine_config.yaml", "governance/routing_policy.yaml",
+                 # D-2 (PLAN_governance_charter_and_genesis_2026-11-19, P1b): the Governance charter and its duties
+                 # list are governed data like the policy files: an edit is reported until re-approved on a card.
+                 "governance/GOVERNANCE_CHARTER.md", "governance/GOVERNANCE_DUTIES.md")
 _PARENT_DIRS = (".claude", "governance", "governance/adapters")
 
 

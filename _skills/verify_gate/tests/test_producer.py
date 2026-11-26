@@ -2,6 +2,7 @@
 flow: seal -> judge -> out-of-band attest -> gate -> receipt, for both backends."""
 import json
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -84,10 +85,13 @@ def test_produce_self_invoked_is_advisory(tmp_path):
 
 def test_produce_pass_writes_receipt(tmp_path):
     code = tmp_path / "c.py"; code.write_text("x=1\n")
+    # RV3-3: receipt issuance requires a v2 verdict; the stub model repeats the package_sha256 it reads in the prompt
     out = produce_review.produce(
         artifact="art", evidence=[], drafter_id="author", producer_id="reviewer",
         backend="stateless_llm", orchestrator_id="ci", anchor_id="run-7", outdir=str(tmp_path),
-        changed_paths=[str(code)], call_fn=lambda p: _verdict_json(refuted=False))
+        changed_paths=[str(code)],
+        call_fn=lambda p: json.dumps({**json.loads(_verdict_json(refuted=False)),
+                                      "package_sha256": re.search(r'"package_sha256": "([0-9a-f]{64})"', p).group(1)}))
     assert out["exit"] == core.ExitCode.PASS and out["receipt_path"] and os.path.exists(out["receipt_path"])
 
 

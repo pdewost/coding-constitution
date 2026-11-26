@@ -19,7 +19,8 @@ import re
 from typing import Callable, Optional
 
 _SCHEMA_HINT = """Return ONLY a JSON object, no prose, matching:
-{"schema":"verify_gate.verdict.v1","artifact":"<id>","drafter_id":"<id>","producer_id":"<id>",
+{"schema":"verify_gate.verdict.v2","package_sha256":"<repeat the bundle's package.package_sha256 exactly>",
+ "artifact":"<id>","drafter_id":"<id>","producer_id":"<id>",
  "lenses":[{"lens":"<name>","verdict":"refuted|holds|partial","probe":"<what you checked — required if holds>",
    "findings":[{"severity":"low|medium|high","claim":"<what's wrong>","cheapest_fix":"<fix>",
      "evidence":{"type":"file|render|source","ref":"<file:line / locator>","literal":"<verbatim quote from the artifact/evidence>"}}]}]}
@@ -46,7 +47,14 @@ def parse_verdict(raw: str, *, producer_id: str, drafter_id: str, artifact: str)
     obj = _extract_json(raw)
     if not isinstance(obj, dict):
         return None
-    obj["schema"] = "verify_gate.verdict.v1"
+    # RV3-3 / s329 F-4: the verdict is v2 when the model declares v2 OR repeats a fingerprint (a non-empty string); a
+    # declared v2 is never relabelled v1, so core refuses its missing or malformed sha. The fingerprint is the model's,
+    # never stamped or normalised here (upper case or whitespace stay refused: a judge that cannot repeat it exactly has
+    # not repeated it). Otherwise the verdict is v1, which earns no receipt.
+    sha = obj.get("package_sha256")
+    declared_v2 = obj.get("schema") == "verify_gate.verdict.v2"
+    obj["schema"] = ("verify_gate.verdict.v2" if declared_v2 or (isinstance(sha, str) and sha)
+                     else "verify_gate.verdict.v1")
     obj["producer_id"] = producer_id
     obj["drafter_id"] = drafter_id
     obj.setdefault("artifact", artifact)

@@ -28,6 +28,7 @@ def run_review(
     anchor_id: str,               # the spawn's external id (subagent id / api call id / CI run id)
     context_isolated: bool,
     outdir: str,
+    package: Optional[dict] = None,
 ) -> dict:
     """Returns {'verdict_path','attestation_path','producer_id','judge_unreachable'}.
     On judge failure, returns judge_unreachable=True with no verdict (gate => exit 4) and a
@@ -49,7 +50,18 @@ def run_review(
     with open(verdict_path, "w", encoding="utf-8") as fh:
         json.dump(verdict, fh, indent=2)
 
-    # The orchestrator stamps the attestation — never the judge.
+    attestation_path = attest(verdict=verdict, backend=backend, orchestrator_id=orchestrator_id, anchor_id=anchor_id,
+                              context_isolated=context_isolated, outdir=outdir, package=package)
+    return {"verdict_path": verdict_path, "attestation_path": attestation_path,
+            "producer_id": producer_id, "judge_unreachable": False}
+
+
+def attest(*, verdict: dict, backend: str, orchestrator_id: str, anchor_id: str, context_isolated: bool,
+           outdir: str, package: Optional[dict] = None) -> str:
+    """Write outdir/attestation.json for `verdict` and return its path. The orchestrator stamps it — never the judge.
+    (produce_review.finish calls this directly, so the verdict's bytes are kept as the judge returned them.)"""
+    producer_id = verdict.get("producer_id")
+    anchor_kind = _anchor_kind_for(backend, orchestrator_id, anchor_id)
     attestation = {
         "schema": "verify_gate.attestation.v1",
         "anchor_kind": anchor_kind,
@@ -58,12 +70,17 @@ def run_review(
         "producer_id": producer_id,
         "context_isolated": bool(context_isolated),
     }
+    if package is not None:
+        # RV3-4: attestation v2. The fingerprint is re-derived from package.json's bytes as read here, and the ref is its
+        # realpath; neither is ever taken from the verdict.
+        import review_package
+        _files, sha = review_package.read(package["package_path"])
+        attestation.update(schema="verify_gate.attestation.v2", package_sha256=sha,
+                           package_ref=os.path.realpath(package["package_path"]))
     attestation_path = os.path.join(outdir, "attestation.json")
     with open(attestation_path, "w", encoding="utf-8") as fh:
         json.dump(attestation, fh, indent=2)
-
-    return {"verdict_path": verdict_path, "attestation_path": attestation_path,
-            "producer_id": producer_id, "judge_unreachable": False}
+    return attestation_path
 
 
 def _anchor_kind_for(backend: str, orchestrator_id: str, anchor_id: str) -> str:

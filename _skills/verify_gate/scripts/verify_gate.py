@@ -9,7 +9,8 @@ receipt (bound to the change-set), and nothing the producer self-asserts.
 Usage:
   verify_gate.py --verdict V.json --attestation A.json [--require-blocking]
                  [--changed f1 f2 ... --receipt R.json]        # validate + spend a receipt (armed roots only)
-                 [--changed f1 f2 ... --write-receipt R.json]  # emit one on an anchored, clean PASS
+                 [--changed f1 f2 ... --write-receipt R.json --package D/package.json]
+                                                    # emit one on an anchored, clean v2 PASS over that package
                  [--override "<reason>"]            # human escape hatch: downgrade BLOCK->advisory
                  [--judge-unreachable]              # runner signals the judge could not be produced
 Exit codes: see core.ExitCode (0 pass/advisory · 1 block · 2 identity · 3 unanchored · 4 judge ·
@@ -47,6 +48,7 @@ def main(argv=None) -> int:
     ap.add_argument("--changed", nargs="*", default=[])
     ap.add_argument("--receipt")
     ap.add_argument("--write-receipt")
+    ap.add_argument("--package", help="the review package.json the attestation names (required with --write-receipt)")
     ap.add_argument("--override", default=None)
     a = ap.parse_args(argv)
     # R-2 path qualification (one rule, both modes): an absolute path as spelled; a relative one joined to this process's cwd
@@ -101,14 +103,19 @@ def main(argv=None) -> int:
     # On a clean PASS, optionally emit a change-set-bound receipt for a downstream closeout gate.
     # R-1: only what an armed gate may accept (PASS, no block finding, block-eligible); anything else writes no receipt.
     if d.exit_code == core.ExitCode.PASS and a.write_receipt:
+        if not a.package:
+            # RV3-7: a receipt binds the reviewed package; without --package none is written
+            print(json.dumps({"decision": "receipt not issued: --write-receipt needs --package D/package.json "
+                                          "(the review package the attestation names)", "paths": list(a.changed)}))
+            return core.ExitCode.RECEIPT_INVALID
         issue_ok, issue_why = receipt_mod.issuable(verdict, attestation)
         if issue_ok:
             try:
                 rec = receipt_mod.write_receipt(changed_paths=a.changed, verdict_path=a.verdict,
-                                                gate_exit=0, attestation_ref=a.attestation)
+                                                gate_exit=0, attestation_ref=a.attestation, package_path=a.package)
             except receipt_mod.UnsafeFile as e:
-                # R-2: issuance reads every file the way validation does, so it refuses every shape validation refuses.
-                print(json.dumps({"decision": f"receipt not issued, unsafe path: {e}", "paths": list(a.changed)}))
+                # R-2 / RV3-5 / D-4: every refusal (unsafe path, package check, spent verdict, bad ledger) is UnsafeFile.
+                print(json.dumps({"decision": f"receipt not issued: {e}", "paths": list(a.changed)}))
                 return core.ExitCode.RECEIPT_INVALID
             with open(a.write_receipt, "w", encoding="utf-8") as fh:
                 json.dump(rec.as_dict(), fh, indent=2)
